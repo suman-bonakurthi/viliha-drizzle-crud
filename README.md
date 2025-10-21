@@ -19,4 +19,4 @@ bulk operations, and full-text search.
 ## Installation
 
 ```bash
-npm install drizzle-crud-nest
+npm i nestjs-drizzle-crud
