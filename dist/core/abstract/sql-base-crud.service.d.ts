@@ -1,0 +1,52 @@
+import { ICrudService, PaginationOptions } from "../interfaces/crud-service.interface";
+import { SqlCrudConfig, SqlOperationOptions } from "../interfaces/sql-crud-config.interface";
+export declare abstract class SqlBaseCrudService<T extends Record<string, any>, CreateDto, UpdateDto, FilterDto> implements ICrudService<T, CreateDto, UpdateDto, FilterDto> {
+    protected readonly config: SqlCrudConfig;
+    protected readonly defaultConfig: SqlCrudConfig;
+    protected buildWhereConditionsFromPartial(where: Partial<T>): any[];
+    constructor(config: SqlCrudConfig);
+    private validateConfiguration;
+    protected abstract validateCreate(data: CreateDto): Promise<void>;
+    protected abstract validateUpdate(id: any, data: UpdateDto): Promise<void>;
+    protected abstract mapCreateDtoToEntity(data: CreateDto): Record<string, any>;
+    protected abstract mapUpdateDtoToEntity(data: UpdateDto): Record<string, any>;
+    protected beforeCreate(data: CreateDto): Promise<CreateDto>;
+    protected afterCreate(entity: T): Promise<void>;
+    protected beforeUpdate(id: any, data: UpdateDto): Promise<UpdateDto>;
+    protected afterUpdate(entity: T): Promise<void>;
+    protected beforeDelete(id: any): Promise<void>;
+    protected afterDelete(id: any): Promise<void>;
+    protected beforeSoftDelete(id: any): Promise<void>;
+    protected afterSoftDelete(id: any): Promise<void>;
+    protected beforeRestore(id: any): Promise<void>;
+    protected afterRestore(entity: T): Promise<void>;
+    find(id: any, options?: SqlOperationOptions): Promise<T | null>;
+    findOne(where: Partial<T>, options?: SqlOperationOptions): Promise<T | null>;
+    findAll(filters?: FilterDto, pagination?: PaginationOptions, options?: SqlOperationOptions): Promise<{
+        data: T[];
+        total: number;
+        page: number;
+        limit: number;
+    }>;
+    create(data: CreateDto, options?: SqlOperationOptions): Promise<T>;
+    update(id: any, data: UpdateDto, options?: SqlOperationOptions): Promise<T>;
+    softDelete(id: any, options?: SqlOperationOptions): Promise<boolean>;
+    restore(id: any, options?: SqlOperationOptions): Promise<T>;
+    delete(id: any, options?: SqlOperationOptions): Promise<boolean>;
+    massCreate(data: CreateDto[], options?: SqlOperationOptions): Promise<T[]>;
+    massUpdate(ids: any[], data: UpdateDto, options?: SqlOperationOptions): Promise<T[]>;
+    massSoftDelete(ids: any[], options?: SqlOperationOptions): Promise<boolean>;
+    massRestore(ids: any[], options?: SqlOperationOptions): Promise<T[]>;
+    massDelete(ids: any[], options?: SqlOperationOptions): Promise<boolean>;
+    exists(id: any, options?: SqlOperationOptions): Promise<boolean>;
+    count(filters?: FilterDto, options?: SqlOperationOptions): Promise<number>;
+    protected buildWhereConditions(filters?: any): any[];
+    protected applyComplexFilter(conditions: any[], column: any, filterObj: any): void;
+    protected applyRelations(query: any, relations: string[]): any;
+    protected executeSqlTransaction<R>(operation: (tx: any) => Promise<R>, existingTransaction?: any): Promise<R>;
+    protected getEntityName(): string;
+    fullTextSearch(searchTerm: string, searchColumns: string[], pagination?: PaginationOptions, options?: SqlOperationOptions): Promise<{
+        data: T[];
+        total: number;
+    }>;
+}
