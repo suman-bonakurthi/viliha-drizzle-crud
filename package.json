@@ -1,6 +1,6 @@
 {
 	"name": "nestjs-drizzle-crud",
-	"version": "1.0.3",
+	"version": "1.0.4",
 	"description": "A complete CRUD abstraction layer for Drizzle ORM in NestJS applications",
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
