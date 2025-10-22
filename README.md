@@ -46,7 +46,7 @@ export class AppModule {}
 
 ## 2. Create a CRUD Service
 
-```
+``` typescript
 // user.service.ts
 import { Injectable } from '@nestjs/common';
 import { SqlBaseCrudService } from 'nestjs-drizzle-crud';
@@ -140,7 +140,7 @@ export class UserService extends SqlBaseCrudService<User, CreateUserDto, UpdateU
 
 ## 3. Use in Controller
 
-```
+``` typescript
 // user.controller.ts
 import { Controller, Get, Post, Put, Delete, Body, Param, Query } from '@nestjs/common';
 import { UserService } from './user.service';
@@ -183,7 +183,7 @@ export class UserController {
 
 ### Bulk Operations
 
-```
+``` typescript
 // Mass create users
 const users = await this.userService.massCreate(userDtos);
 
@@ -199,7 +199,7 @@ await this.userService.massSoftDelete([1, 2, 3]);
 
 ### Full-Text Search (PostgreSQL)
 
-```
+``` typescript
 const results = await this.userService.fullTextSearch(
   'john doe',
   ['name', 'email', 'bio']
@@ -208,7 +208,7 @@ const results = await this.userService.fullTextSearch(
 
 ### Transactions
 
-```
+``` typescript
 await this.userService.executeSqlTransaction(async (tx) => {
   await this.userService.create(user1, { transaction: tx });
   await this.userService.create(user2, { transaction: tx });
@@ -217,7 +217,7 @@ await this.userService.executeSqlTransaction(async (tx) => {
 
 ### Advanced Filtering
 
-```
+``` typescript
 // Complex filters
 const results = await this.userService.findAll({
   name: { like: 'John%' },
@@ -235,7 +235,7 @@ const user = await this.userService.find(1, {
 # Module Configuration
 ## Async Configuration
 
-``` 
+``` typescript
 DrizzleCrudModule.forRootAsync({
   imports: [ConfigModule],
   useFactory: async (configService: ConfigService) => ({
@@ -251,7 +251,7 @@ DrizzleCrudModule.forRootAsync({
 
 ## Multiple Entities
 
-```
+``` typescript
 DrizzleCrudModule.forFeature([
   {
     name: 'User',
@@ -269,7 +269,7 @@ DrizzleCrudModule.forFeature([
 ```
 
 # Testing
-```
+``` typescript
 // user.service.spec.ts
 import { TestCrudFactory } from 'nestjs-drizzle-crud/test-utils';
 
@@ -343,7 +343,7 @@ describe('UserService', () => {
 
 
 # Configuration Options
-```
+``` typescript
 interface SqlCrudConfig {
   dialect: 'postgresql' | 'mysql';
   db: any; // Drizzle database instance
