@@ -1,4 +1,10 @@
 import { PrimaryKeyType, SqlDialect } from "../types/sql.types";
+export interface RelationConfig {
+    table: any;
+    localKey: string;
+    references?: string;
+}
+export type RelationsConfig = Record<string, RelationConfig>;
 export interface SqlCrudConfig {
     dialect: SqlDialect;
     db: any;
@@ -23,6 +29,7 @@ export interface SqlCrudConfig {
         jsonSupport: boolean;
         enableFullTextSearch: boolean;
     };
+    relations?: RelationsConfig;
 }
 export interface SqlOperationOptions {
     transaction?: any;

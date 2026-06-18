@@ -31,6 +31,8 @@ DrizzleCrudModule.forFeature([{ service: UsersService, table: users }]);
 - [API reference](#api-reference)
 - [Filtering](#filtering)
 - [Pagination & sorting](#pagination--sorting)
+- [Relations](#relations)
+- [Primary keys (serial / uuid)](#primary-keys-serial--uuid)
 - [Soft delete](#soft-delete)
 - [Bulk operations](#bulk-operations)
 - [Transactions](#transactions)
@@ -51,6 +53,8 @@ DrizzleCrudModule.forFeature([{ service: UsersService, table: users }]);
 - 📦 **Bulk operations** — mass create/update/delete inside a transaction
 - 🔍 **Rich filtering** — equality, `in`, comparison operators, `like`/`ilike`, null checks
 - 🔎 **Full-text search** — PostgreSQL `tsvector`/`tsquery`
+- 🔗 **Relations** — many-to-one eager loading and filtering by related columns
+- 🔑 **Flexible primary keys** — `serial` / `int` / `bigint` / `bigserial` / `uuid`
 - 🪝 **Hooks & validation** — `before*`/`after*` hooks, `validateCreate`/`validateUpdate`
 - 🧪 **Test utilities** — mock db/table/entity factories
 
@@ -344,14 +348,14 @@ export class UsersService extends SqlBaseCrudService<User, CreateUserDto, Update
 interface SqlOperationOptions {
   transaction?: any;            // run within an existing transaction
   select?: string[];            // return only these columns
-  relations?: string[];         // reserved — not yet implemented (no-op)
+  relations?: string[];         // eager-load these configured relations (see Relations)
   hooks?: { skipBefore?: boolean; skipAfter?: boolean };
   lock?: 'update' | 'share' | 'none';
   forNoKeyUpdate?: boolean;
 }
 ```
 
-> ⚠️ `relations` is reserved for future use and currently does nothing.
+> `relations` eager-loads relations declared in the entity's config — see [Relations](#relations).
 
 ---
 
@@ -397,6 +401,98 @@ await service.findAll(
 ```
 
 `limit` is capped at `pagination.maxLimit`. `sortOrder` defaults to `'desc'`.
+
+---
+
+## Relations
+
+The package supports **many-to-one / belongs-to** relations: a foreign key on
+this entity's table points at another table's key. Declare them in the entity's
+`forFeature` config under `relations`, keyed by relation name:
+
+```typescript
+import { cities, states } from './db/schema';
+
+DrizzleCrudModule.forFeature([
+  {
+    service: CitiesService,
+    table: cities,
+    config: {
+      relations: {
+        // cities.state_id -> states.id   (`references` defaults to 'id')
+        state: { table: states, localKey: 'state_id', references: 'id' },
+      },
+    },
+  },
+]);
+```
+
+Once declared, you get two capabilities:
+
+### 1. Eager loading
+
+Pass `relations` in the operation options to LEFT JOIN and nest the related row:
+
+```typescript
+await cities.find(1, { relations: ['state'] });
+// → { id: 1, name: 'Bengaluru', state_id: 7, state: { id: 7, name: 'Karnataka', country_id: 3 } }
+
+await cities.findAll({}, { page: 1, limit: 20 }, { relations: ['state'] });
+```
+
+If there's no match, the relation comes back as `null`.
+
+### 2. Filtering by related columns
+
+Use the relation name as a filter key with a nested object of the **related
+table's** columns. Supports the same [operators](#filtering) as normal filters:
+
+```typescript
+// all cities whose state is named 'Karnataka' (case-insensitive exact)
+await cities.findAll({ state: { name: 'Karnataka' } });
+
+// all cities in a country — filter on the intermediate table's FK column
+await cities.findAll({ state: { country_id: 3 } });
+
+// combine with normal column filters and operators
+await cities.findAll({ name: { ilike: 'B%' }, state: { country_id: 3 } });
+```
+
+> **Scope:** only **many-to-one / one-to-one** (belongs-to) relations are
+> supported. Has-many collection loading and many-to-many (join tables) are not
+> handled — model those with a custom service method using `this.config.db`, or
+> orchestrate across services in a controller.
+>
+> **Multi-level filtering** works through the intermediate table's columns
+> (e.g. filter cities by `state.country_id`), so you usually don't need a
+> direct relation to the far table.
+
+---
+
+## Primary keys (serial / uuid)
+
+Each entity declares its primary key via `primaryKey` (column name, default
+`id`) and `primaryKeyType`. Both auto-increment and UUID keys are supported.
+
+```typescript
+// serial / auto-increment (default)
+{ service: UsersService, table: users }   // primaryKey 'id', primaryKeyType 'serial'
+
+// UUID
+{
+  service: TagsService,
+  table: tags,                  // e.g. uuid('id').primaryKey().defaultRandom()
+  config: { primaryKey: 'id', primaryKeyType: 'uuid' },
+}
+```
+
+`primaryKeyType` accepts `'serial' | 'bigserial' | 'int' | 'bigint' | 'uuid'`.
+On PostgreSQL the created row (including a DB-generated UUID) is returned via
+`RETURNING`. On MySQL (no `RETURNING`), provide the UUID in your create payload
+so the row can be re-read — auto-increment keys use the driver's `insertId`.
+
+> Remember: with UUID keys, route params are strings — don't apply
+> `ParseIntPipe` in your controller.
 
 ---
 
@@ -523,7 +619,8 @@ export class XService extends SqlBaseCrudService<X, CreateXDto, UpdateXDto, XFil
 - `findAll` returns `{ data, total, page, limit }` — not a bare array.
 - Filter operators live inside an object value: `{ age: { gte: 18 } }`. `like`/`ilike` require caller-supplied `%` wildcards; a bare string is exact match.
 - `delete`/`softDelete` return `boolean`; `update`/`restore` return the entity and throw `EntityNotFoundException` when missing.
-- `relations` option is not implemented (no-op).
+- Relations (many-to-one only): declare in forFeature `config.relations = { relName: { table, localKey, references? } }`. Then eager-load via `options.relations: ['relName']` (nested object on the result, `null` if unmatched) and filter via `findAll({ relName: { col: value } })` (same operators; multi-level via the intermediate table's columns, e.g. `state.country_id`). No has-many/many-to-many.
+- Primary keys: `primaryKey` (default `'id'`) + `primaryKeyType` (`'serial' | 'bigserial' | 'int' | 'bigint' | 'uuid'`) per entity in forFeature config. UUID works on Postgres via RETURNING; with uuid keys, route params are strings — don't use `ParseIntPipe`.
 - Full-text search is PostgreSQL-only.
 - Exports: `SqlBaseCrudService`, `DrizzleCrudModule`, `DRIZZLE_DB`, `DRIZZLE_CRUD_CONFIG`, `TestCrudFactory`, exceptions (`EntityNotFoundException`, `BulkOperationException`, …), and types (`SqlCrudConfig`, `SqlOperationOptions`, `DrizzleCrudConfig`, `CrudFeature`, `SqlDialect`, `PrimaryKeyType`).
 
@@ -540,6 +637,7 @@ interface SqlCrudConfig {
   timestamps?: { createdAt: string; updatedAt: string };
   pagination?: { defaultLimit: number; maxLimit: number };
   sql?: { caseSensitive: boolean; useReturning: boolean; jsonSupport: boolean; enableFullTextSearch: boolean };
+  relations?: Record<string, { table: any; localKey: string; references?: string }>;
 }
 ```
 

@@ -101,43 +101,100 @@ class SqlBaseCrudService {
     async afterSoftDelete(id) { }
     async beforeRestore(id) { }
     async afterRestore(entity) { }
+    eagerRelations(relations) {
+        const configured = this.config.relations || {};
+        return (relations || []).filter((name) => !!configured[name]);
+    }
+    buildSelection(select, eager) {
+        const allColumns = (0, drizzle_orm_1.getTableColumns)(this.config.table);
+        let base;
+        if (select && select.length > 0) {
+            base = {};
+            for (const field of select) {
+                if (allColumns[field])
+                    base[field] = allColumns[field];
+            }
+        }
+        else {
+            base = { ...allColumns };
+        }
+        const configured = this.config.relations || {};
+        for (const name of eager) {
+            const rel = configured[name];
+            if (rel)
+                base[name] = (0, drizzle_orm_1.getTableColumns)(rel.table);
+        }
+        return base;
+    }
+    startSelect(db, select, eager, hasJoins = false) {
+        if (eager.length > 0 || hasJoins) {
+            return db
+                .select(this.buildSelection(select, eager))
+                .from(this.config.table);
+        }
+        const fields = this.buildSelectFields(select);
+        return fields
+            ? db.select(fields).from(this.config.table)
+            : db.select().from(this.config.table);
+    }
+    applyJoins(query, relationNames) {
+        const configured = this.config.relations || {};
+        let q = query;
+        for (const name of relationNames) {
+            const rel = configured[name];
+            if (!rel)
+                continue;
+            q = q.leftJoin(rel.table, (0, drizzle_orm_1.eq)(this.config.table[rel.localKey], rel.table[rel.references ?? "id"]));
+        }
+        return q;
+    }
+    normalizeRelations(rows, eager) {
+        if (!eager.length || !Array.isArray(rows))
+            return rows;
+        return rows.map((row) => {
+            if (!row || typeof row !== "object")
+                return row;
+            const out = { ...row };
+            for (const name of eager) {
+                const related = out[name];
+                if (related &&
+                    typeof related === "object" &&
+                    Object.values(related).every((v) => v === null)) {
+                    out[name] = null;
+                }
+            }
+            return out;
+        });
+    }
     async find(id, options) {
         const { transaction, relations = [], select = [] } = options || {};
         const db = transaction || this.config.db;
-        const fields = this.buildSelectFields(select);
-        let query = fields
-            ? db.select(fields).from(this.config.table)
-            : db.select().from(this.config.table);
+        const eager = this.eagerRelations(relations);
         const conditions = [(0, drizzle_orm_1.eq)(this.config.table[this.config.primaryKey], id)];
         if (this.config.softDelete?.enabled) {
             conditions.push((0, drizzle_orm_1.isNull)(this.config.table[this.config.softDelete.column]));
         }
-        query = query.where((0, drizzle_orm_1.and)(...conditions));
-        if (relations.length > 0) {
-            query = this.applyRelations(query, relations);
-        }
-        query = query.limit(1);
+        let query = this.startSelect(db, select, eager);
+        query = this.applyJoins(query, eager)
+            .where((0, drizzle_orm_1.and)(...conditions))
+            .limit(1);
         const result = await query;
-        return result[0] || null;
+        return this.normalizeRelations(result, eager)[0] || null;
     }
     async findOne(where, options) {
         const { transaction, relations = [], select = [] } = options || {};
         const db = transaction || this.config.db;
-        const fields = this.buildSelectFields(select);
-        let query = fields
-            ? db.select(fields).from(this.config.table)
-            : db.select().from(this.config.table);
+        const eager = this.eagerRelations(relations);
         const conditions = this.buildWhereConditionsFromPartial(where);
         if (this.config.softDelete?.enabled) {
             conditions.push((0, drizzle_orm_1.isNull)(this.config.table[this.config.softDelete.column]));
         }
-        query = query.where((0, drizzle_orm_1.and)(...conditions));
-        if (relations.length > 0) {
-            query = this.applyRelations(query, relations);
-        }
-        query = query.limit(1);
+        let query = this.startSelect(db, select, eager);
+        query = this.applyJoins(query, eager)
+            .where((0, drizzle_orm_1.and)(...conditions))
+            .limit(1);
         const result = await query;
-        return result[0] || null;
+        return this.normalizeRelations(result, eager)[0] || null;
     }
     async findAll(filters, pagination, options) {
         const { transaction, relations = [], select = [] } = options || {};
@@ -145,14 +202,14 @@ class SqlBaseCrudService {
         const safeLimit = Math.min(limit, this.config.pagination.maxLimit);
         const offset = (page - 1) * safeLimit;
         const db = transaction || this.config.db;
-        const fields = this.buildSelectFields(select);
-        let dataQuery = fields
-            ? db.select(fields).from(this.config.table)
-            : db.select().from(this.config.table);
-        const conditions = this.buildWhereConditions(filters);
+        const eager = this.eagerRelations(relations);
+        const { conditions, relations: filterRelations } = this.buildFilterConditions(filters);
         if (this.config.softDelete?.enabled) {
             conditions.push((0, drizzle_orm_1.isNull)(this.config.table[this.config.softDelete.column]));
         }
+        const joinRelations = Array.from(new Set([...eager, ...filterRelations]));
+        let dataQuery = this.startSelect(db, select, eager, joinRelations.length > 0);
+        dataQuery = this.applyJoins(dataQuery, joinRelations);
         if (conditions.length > 0) {
             dataQuery = dataQuery.where((0, drizzle_orm_1.and)(...conditions));
         }
@@ -162,18 +219,21 @@ class SqlBaseCrudService {
                 : (0, drizzle_orm_1.asc)(this.config.table[sortBy]));
         }
         dataQuery = dataQuery.limit(safeLimit).offset(offset);
-        if (relations.length > 0) {
-            dataQuery = this.applyRelations(dataQuery, relations);
-        }
         let countQuery = db
             .select({ count: (0, drizzle_orm_1.sql) `count(*)` })
             .from(this.config.table);
+        countQuery = this.applyJoins(countQuery, filterRelations);
         if (conditions.length > 0) {
             countQuery = countQuery.where((0, drizzle_orm_1.and)(...conditions));
         }
         const [data, totalResult] = await Promise.all([dataQuery, countQuery]);
         const total = parseInt(totalResult[0]?.count?.toString() || "0");
-        return { data, total, page, limit: safeLimit };
+        return {
+            data: this.normalizeRelations(data, eager),
+            total,
+            page,
+            limit: safeLimit,
+        };
     }
     async create(data, options) {
         const { transaction, hooks = {} } = options || {};
@@ -199,7 +259,7 @@ class SqlBaseCrudService {
         }
         else {
             const result = await insertQuery;
-            const lastInsertId = result[0].insertId;
+            const lastInsertId = entityData[this.config.primaryKey] ?? result?.[0]?.insertId;
             const createdEntity = await this.find(lastInsertId, options);
             if (!createdEntity)
                 throw new Error("Failed to create entity");
@@ -440,40 +500,65 @@ class SqlBaseCrudService {
         let query = db
             .select({ count: (0, drizzle_orm_1.sql) `count(*)` })
             .from(this.config.table);
-        const conditions = this.buildWhereConditions(filters);
+        const { conditions, relations: filterRelations } = this.buildFilterConditions(filters);
         if (this.config.softDelete?.enabled) {
             conditions.push((0, drizzle_orm_1.isNull)(this.config.table[this.config.softDelete.column]));
         }
+        query = this.applyJoins(query, filterRelations);
         if (conditions.length > 0)
             query = query.where((0, drizzle_orm_1.and)(...conditions));
         const result = await query;
         return parseInt(result[0]?.count?.toString() || "0");
     }
-    buildWhereConditions(filters) {
-        if (!filters)
-            return [];
+    pushColumnCondition(conditions, column, value) {
+        if (Array.isArray(value)) {
+            conditions.push((0, drizzle_orm_1.inArray)(column, value));
+        }
+        else if (typeof value === "string" &&
+            this.config.sql?.caseSensitive === false) {
+            conditions.push((0, drizzle_orm_1.ilike)(column, value));
+        }
+        else if (typeof value === "object" && value !== null) {
+            this.applyComplexFilter(conditions, column, value);
+        }
+        else {
+            conditions.push((0, drizzle_orm_1.eq)(column, value));
+        }
+    }
+    buildFilterConditions(filters) {
         const conditions = [];
+        const relations = [];
+        if (!filters)
+            return { conditions, relations };
+        const relConfig = this.config.relations || {};
         for (const [key, value] of Object.entries(filters)) {
             if (value === undefined || value === null)
                 continue;
+            const relation = relConfig[key];
+            if (relation && typeof value === "object" && !Array.isArray(value)) {
+                let used = false;
+                for (const [col, colValue] of Object.entries(value)) {
+                    if (colValue === undefined || colValue === null)
+                        continue;
+                    const relColumn = relation.table[col];
+                    if (!relColumn)
+                        continue;
+                    this.pushColumnCondition(conditions, relColumn, colValue);
+                    used = true;
+                }
+                if (used)
+                    relations.push(key);
+                continue;
+            }
             const column = this.config.table[key];
             if (!column)
                 continue;
-            if (Array.isArray(value)) {
-                conditions.push((0, drizzle_orm_1.inArray)(column, value));
-            }
-            else if (typeof value === "string" &&
-                this.config.sql?.caseSensitive === false) {
-                conditions.push((0, drizzle_orm_1.ilike)(column, value));
-            }
-            else if (typeof value === "object" && value !== null) {
-                this.applyComplexFilter(conditions, column, value);
-            }
-            else {
-                conditions.push((0, drizzle_orm_1.eq)(column, value));
-            }
+            this.pushColumnCondition(conditions, column, value);
         }
-        return conditions;
+        return { conditions, relations };
+    }
+    buildWhereConditions(filters) {
+        return this.buildFilterConditions(filters).conditions;
     }
     applyComplexFilter(conditions, column, filterObj) {
         for (const [op, value] of Object.entries(filterObj)) {
@@ -510,9 +595,6 @@ class SqlBaseCrudService {
                     break;
             }
         }
-    }
-    applyRelations(query, relations) {
-        return query;
     }
     async executeSqlTransaction(operation, existingTransaction) {
         if (existingTransaction)

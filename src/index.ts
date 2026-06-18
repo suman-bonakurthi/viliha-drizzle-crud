@@ -31,6 +31,8 @@ export type {
 } from "./core/interfaces/drizzle-crud-config.interface";
 // Configuration interfaces
 export type {
+	RelationConfig,
+	RelationsConfig,
 	SqlCrudConfig,
 	SqlOperationOptions,
 } from "./core/interfaces/sql-crud-config.interface";

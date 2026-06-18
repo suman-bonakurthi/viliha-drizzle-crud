@@ -4,6 +4,7 @@ import {
 	asc,
 	desc,
 	eq,
+	getTableColumns,
 	getTableName,
 	gt,
 	gte,
@@ -148,30 +149,117 @@ export abstract class SqlBaseCrudService<
 	protected async beforeRestore(id: any): Promise<void> {}
 	protected async afterRestore(entity: T): Promise<void> {}
 
+	// ---- Relation helpers (many-to-one / belongs-to) ----
+
+	// Keep only the requested relation names that are actually configured.
+	protected eagerRelations(relations: string[]): string[] {
+		const configured = this.config.relations || {};
+		return (relations || []).filter((name) => !!configured[name]);
+	}
+
+	// Build the SELECT projection: base columns (optionally narrowed by
+	// `select`) plus a nested object of columns for each eager relation.
+	protected buildSelection(
+		select: string[],
+		eager: string[],
+	): Record<string, any> {
+		const allColumns = getTableColumns(this.config.table);
+		let base: Record<string, any>;
+		if (select && select.length > 0) {
+			base = {};
+			for (const field of select) {
+				if (allColumns[field]) base[field] = allColumns[field];
+			}
+		} else {
+			base = { ...allColumns };
+		}
+		const configured = this.config.relations || {};
+		for (const name of eager) {
+			const rel = configured[name];
+			if (rel) base[name] = getTableColumns(rel.table);
+		}
+		return base;
+	}
+
+	// Start a SELECT with the right projection. An explicit projection is needed
+	// whenever a JOIN is applied (eager load OR relation filter) — otherwise a
+	// plain `select()` + join makes Drizzle nest rows per table
+	// ({ table: {...}, joined: {...} }). When there are no joins this matches the
+	// original all-columns / partial-select behaviour.
+	protected startSelect(
+		db: any,
+		select: string[],
+		eager: string[],
+		hasJoins = false,
+	): any {
+		if (eager.length > 0 || hasJoins) {
+			return db
+				.select(this.buildSelection(select, eager))
+				.from(this.config.table);
+		}
+		const fields = this.buildSelectFields(select);
+		return fields
+			? db.select(fields).from(this.config.table)
+			: db.select().from(this.config.table);
+	}
+
+	// LEFT JOIN each named relation onto the query.
+	protected applyJoins(query: any, relationNames: string[]): any {
+		const configured = this.config.relations || {};
+		let q = query;
+		for (const name of relationNames) {
+			const rel = configured[name];
+			if (!rel) continue;
+			q = q.leftJoin(
+				rel.table,
+				eq(
+					this.config.table[rel.localKey],
+					rel.table[rel.references ?? "id"],
+				),
+			);
+		}
+		return q;
+	}
+
+	// A LEFT JOIN with no match yields a relation object full of nulls; collapse
+	// those to a single `null` so callers get a clean shape.
+	protected normalizeRelations(rows: any[], eager: string[]): any[] {
+		if (!eager.length || !Array.isArray(rows)) return rows;
+		return rows.map((row) => {
+			if (!row || typeof row !== "object") return row;
+			const out = { ...row };
+			for (const name of eager) {
+				const related = out[name];
+				if (
+					related &&
+					typeof related === "object" &&
+					Object.values(related).every((v) => v === null)
+				) {
+					out[name] = null;
+				}
+			}
+			return out;
+		});
+	}
+
 	// Single Operations
 	async find(id: any, options?: SqlOperationOptions): Promise<T | null> {
 		const { transaction, relations = [], select = [] } = options || {};
 		const db = transaction || this.config.db;
+		const eager = this.eagerRelations(relations);
 
-		const fields = this.buildSelectFields(select);
-		let query = fields
-			? db.select(fields).from(this.config.table)
-			: db.select().from(this.config.table);
 		const conditions = [eq(this.config.table[this.config.primaryKey], id)];
-
 		if (this.config.softDelete?.enabled) {
 			conditions.push(isNull(this.config.table[this.config.softDelete.column]));
 		}
 
-		query = query.where(and(...conditions));
+		let query = this.startSelect(db, select, eager);
+		query = this.applyJoins(query, eager)
+			.where(and(...conditions))
+			.limit(1);
 
-		if (relations.length > 0) {
-			query = this.applyRelations(query, relations);
-		}
-
-		query = query.limit(1);
 		const result = await query;
-		return result[0] || null;
+		return this.normalizeRelations(result, eager)[0] || null;
 	}
 
 	async findOne(
@@ -180,28 +268,20 @@ export abstract class SqlBaseCrudService<
 	): Promise<T | null> {
 		const { transaction, relations = [], select = [] } = options || {};
 		const db = transaction || this.config.db;
+		const eager = this.eagerRelations(relations);
 
-		const fields = this.buildSelectFields(select);
-		let query = fields
-			? db.select(fields).from(this.config.table)
-			: db.select().from(this.config.table);
-
-		// Build WHERE conditions from Partial<T>
 		const conditions = this.buildWhereConditionsFromPartial(where);
-
 		if (this.config.softDelete?.enabled) {
 			conditions.push(isNull(this.config.table[this.config.softDelete.column]));
 		}
 
-		query = query.where(and(...conditions));
+		let query = this.startSelect(db, select, eager);
+		query = this.applyJoins(query, eager)
+			.where(and(...conditions))
+			.limit(1);
 
-		if (relations.length > 0) {
-			query = this.applyRelations(query, relations);
-		}
-
-		query = query.limit(1);
 		const result = await query;
-		return result[0] || null;
+		return this.normalizeRelations(result, eager)[0] || null;
 	}
 
 	async findAll(
@@ -220,21 +300,29 @@ export abstract class SqlBaseCrudService<
 		const safeLimit = Math.min(limit, this.config.pagination!.maxLimit!);
 		const offset = (page - 1) * safeLimit;
 		const db = transaction || this.config.db;
+		const eager = this.eagerRelations(relations);
 
-		const fields = this.buildSelectFields(select);
-		let dataQuery = fields
-			? db.select(fields).from(this.config.table)
-			: db.select().from(this.config.table);
-		const conditions = this.buildWhereConditions(filters);
-
+		const { conditions, relations: filterRelations } =
+			this.buildFilterConditions(filters);
 		if (this.config.softDelete?.enabled) {
 			conditions.push(isNull(this.config.table[this.config.softDelete.column]));
 		}
 
+		// Join everything needed for eager-loading and for relation filters.
+		const joinRelations = Array.from(
+			new Set([...eager, ...filterRelations]),
+		);
+
+		let dataQuery = this.startSelect(
+			db,
+			select,
+			eager,
+			joinRelations.length > 0,
+		);
+		dataQuery = this.applyJoins(dataQuery, joinRelations);
 		if (conditions.length > 0) {
 			dataQuery = dataQuery.where(and(...conditions));
 		}
-
 		if (sortBy && this.config.table[sortBy]) {
 			dataQuery = dataQuery.orderBy(
 				sortOrder === "desc"
@@ -242,16 +330,13 @@ export abstract class SqlBaseCrudService<
 					: asc(this.config.table[sortBy]),
 			);
 		}
-
 		dataQuery = dataQuery.limit(safeLimit).offset(offset);
-
-		if (relations.length > 0) {
-			dataQuery = this.applyRelations(dataQuery, relations);
-		}
 
 		let countQuery = db
 			.select({ count: sql<number>`count(*)` })
 			.from(this.config.table);
+		// Count only needs the relations used for filtering, not eager loads.
+		countQuery = this.applyJoins(countQuery, filterRelations);
 		if (conditions.length > 0) {
 			countQuery = countQuery.where(and(...conditions));
 		}
@@ -259,7 +344,12 @@ export abstract class SqlBaseCrudService<
 		const [data, totalResult] = await Promise.all([dataQuery, countQuery]);
 		const total = parseInt(totalResult[0]?.count?.toString() || "0");
 
-		return { data, total, page, limit: safeLimit };
+		return {
+			data: this.normalizeRelations(data, eager),
+			total,
+			page,
+			limit: safeLimit,
+		};
 	}
 
 	async create(data: CreateDto, options?: SqlOperationOptions): Promise<T> {
@@ -287,7 +377,11 @@ export abstract class SqlBaseCrudService<
 			return createdEntity;
 		} else {
 			const result = await insertQuery;
-			const lastInsertId = result[0].insertId;
+			// Without RETURNING (e.g. MySQL): prefer a client-supplied primary key
+			// (required for uuid / non-auto-increment keys), otherwise fall back
+			// to the driver's auto-increment insertId.
+			const lastInsertId =
+				entityData[this.config.primaryKey] ?? result?.[0]?.insertId;
 			const createdEntity = await this.find(lastInsertId, options);
 			if (!createdEntity) throw new Error("Failed to create entity");
 			if (!hooks.skipAfter) await this.afterCreate(createdEntity);
@@ -560,43 +654,90 @@ export abstract class SqlBaseCrudService<
 		let query = db
 			.select({ count: sql<number>`count(*)` })
 			.from(this.config.table);
-		const conditions = this.buildWhereConditions(filters);
+		const { conditions, relations: filterRelations } =
+			this.buildFilterConditions(filters);
 
 		if (this.config.softDelete?.enabled) {
 			conditions.push(isNull(this.config.table[this.config.softDelete.column]));
 		}
 
+		query = this.applyJoins(query, filterRelations);
 		if (conditions.length > 0) query = query.where(and(...conditions));
 		const result = await query;
 		return parseInt(result[0]?.count?.toString() || "0");
 	}
 
 	// Protected Helper Methods
-	protected buildWhereConditions(filters?: any): any[] {
-		if (!filters) return [];
+
+	// Build a single column condition from a filter value:
+	//   array            -> IN (...)
+	//   string           -> case-insensitive exact match (when sql.caseSensitive
+	//                        is false) or eq
+	//   { op: value, ... } -> comparison/pattern operators (see applyComplexFilter)
+	//   scalar           -> eq
+	protected pushColumnCondition(
+		conditions: any[],
+		column: any,
+		value: any,
+	): void {
+		if (Array.isArray(value)) {
+			conditions.push(inArray(column, value));
+		} else if (
+			typeof value === "string" &&
+			this.config.sql?.caseSensitive === false
+		) {
+			// Case-insensitive *exact* match. Use the `{ like: ... }` /
+			// `{ ilike: ... }` operators explicitly for pattern matching.
+			conditions.push(ilike(column, value));
+		} else if (typeof value === "object" && value !== null) {
+			this.applyComplexFilter(conditions, column, value);
+		} else {
+			conditions.push(eq(column, value));
+		}
+	}
+
+	// Build WHERE conditions from a filter object. A key matching a configured
+	// relation, with an object value, filters by the related table's columns
+	// (e.g. { state: { name: 'X', country_id: 1 } }) and the relation name is
+	// returned so the caller can JOIN it. Returns both the conditions and the
+	// set of relations that must be joined.
+	protected buildFilterConditions(filters?: any): {
+		conditions: any[];
+		relations: string[];
+	} {
 		const conditions: any[] = [];
+		const relations: string[] = [];
+		if (!filters) return { conditions, relations };
+
+		const relConfig = this.config.relations || {};
 
 		for (const [key, value] of Object.entries(filters)) {
 			if (value === undefined || value === null) continue;
+
+			const relation = relConfig[key];
+			if (relation && typeof value === "object" && !Array.isArray(value)) {
+				let used = false;
+				for (const [col, colValue] of Object.entries(value)) {
+					if (colValue === undefined || colValue === null) continue;
+					const relColumn = relation.table[col];
+					if (!relColumn) continue;
+					this.pushColumnCondition(conditions, relColumn, colValue);
+					used = true;
+				}
+				if (used) relations.push(key);
+				continue;
+			}
+
 			const column = this.config.table[key];
 			if (!column) continue;
-
-			if (Array.isArray(value)) {
-				conditions.push(inArray(column, value));
-			} else if (
-				typeof value === "string" &&
-				this.config.sql?.caseSensitive === false
-			) {
-				// Case-insensitive *exact* match. Use the `{ like: ... }` /
-				// `{ ilike: ... }` operators explicitly for pattern matching.
-				conditions.push(ilike(column, value));
-			} else if (typeof value === "object" && value !== null) {
-				this.applyComplexFilter(conditions, column, value);
-			} else {
-				conditions.push(eq(column, value));
-			}
+			this.pushColumnCondition(conditions, column, value);
 		}
-		return conditions;
+
+		return { conditions, relations };
+	}
+
+	protected buildWhereConditions(filters?: any): any[] {
+		return this.buildFilterConditions(filters).conditions;
 	}
 
 	protected applyComplexFilter(
@@ -639,11 +780,6 @@ export abstract class SqlBaseCrudService<
 					break;
 			}
 		}
-	}
-
-	protected applyRelations(query: any, relations: string[]): any {
-		// Placeholder for Drizzle relation implementation
-		return query;
 	}
 
 	protected async executeSqlTransaction<R>(

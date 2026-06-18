@@ -1,5 +1,15 @@
 import { PrimaryKeyType, SqlDialect } from "../types/sql.types";
 
+// A many-to-one / one-to-one (belongs-to) relation: this table's `localKey`
+// references `references` (default the related table's primary key) on `table`.
+export interface RelationConfig {
+	table: any;
+	localKey: string;
+	references?: string;
+}
+
+export type RelationsConfig = Record<string, RelationConfig>;
+
 export interface SqlCrudConfig {
 	// Database configuration
 	dialect: SqlDialect;
@@ -35,6 +45,11 @@ export interface SqlCrudConfig {
 		jsonSupport: boolean;
 		enableFullTextSearch: boolean;
 	};
+
+	// Many-to-one / one-to-one relations, keyed by relation name. Enables
+	// eager loading (options.relations) and filtering by related columns
+	// (filters: { <relationName>: { <col>: value } }).
+	relations?: RelationsConfig;
 }
 
 export interface SqlOperationOptions {

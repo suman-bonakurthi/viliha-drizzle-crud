@@ -22,6 +22,11 @@ export declare abstract class SqlBaseCrudService<T extends Record<string, any>, 
     protected afterSoftDelete(id: any): Promise<void>;
     protected beforeRestore(id: any): Promise<void>;
     protected afterRestore(entity: T): Promise<void>;
+    protected eagerRelations(relations: string[]): string[];
+    protected buildSelection(select: string[], eager: string[]): Record<string, any>;
+    protected startSelect(db: any, select: string[], eager: string[], hasJoins?: boolean): any;
+    protected applyJoins(query: any, relationNames: string[]): any;
+    protected normalizeRelations(rows: any[], eager: string[]): any[];
     find(id: any, options?: SqlOperationOptions): Promise<T | null>;
     findOne(where: Partial<T>, options?: SqlOperationOptions): Promise<T | null>;
     findAll(filters?: FilterDto, pagination?: PaginationOptions, options?: SqlOperationOptions): Promise<{
@@ -42,9 +47,13 @@ export declare abstract class SqlBaseCrudService<T extends Record<string, any>, 
     massDelete(ids: any[], options?: SqlOperationOptions): Promise<boolean>;
     exists(id: any, options?: SqlOperationOptions): Promise<boolean>;
     count(filters?: FilterDto, options?: SqlOperationOptions): Promise<number>;
+    protected pushColumnCondition(conditions: any[], column: any, value: any): void;
+    protected buildFilterConditions(filters?: any): {
+        conditions: any[];
+        relations: string[];
+    };
     protected buildWhereConditions(filters?: any): any[];
     protected applyComplexFilter(conditions: any[], column: any, filterObj: any): void;
-    protected applyRelations(query: any, relations: string[]): any;
     protected executeSqlTransaction<R>(operation: (tx: any) => Promise<R>, existingTransaction?: any): Promise<R>;
     protected getEntityName(): string;
     fullTextSearch(searchTerm: string, searchColumns: string[], pagination?: PaginationOptions, options?: SqlOperationOptions): Promise<{
