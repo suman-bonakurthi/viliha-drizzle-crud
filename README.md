@@ -1,18 +1,60 @@
-# NestJS Drizzle CRUD
+# nestjs-drizzle-crud
 
-A complete, type-safe CRUD abstraction layer for Drizzle ORM in NestJS applications. Supports PostgreSQL and MySQL with advanced features like soft delete, transactions, bulk operations, and full-text search.
+A complete, type-safe CRUD abstraction layer for [Drizzle ORM](https://orm.drizzle.team/) in [NestJS](https://nestjs.com/) applications.
+
+Configure the database connection **once**, then every entity gets full CRUD (find / create / update / delete / soft-delete / bulk / pagination / filtering / full-text search) by extending one base class — no per-service connection wiring.
+
+```typescript
+// 1. configure once (app.module.ts)
+DrizzleCrudModule.forRoot({
+  dialect: 'postgresql',
+  connectionString: process.env.DATABASE_URL,
+  schema,
+});
+
+// 2. a fully-featured CRUD service is just:
+export class UsersService extends SqlBaseCrudService<User> {}
+
+// 3. bind it to a table (users.module.ts)
+DrizzleCrudModule.forFeature([{ service: UsersService, table: users }]);
+```
+
+---
+
+## Table of contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Quick start](#quick-start)
+- [Configuration](#configuration)
+- [Defining services](#defining-services)
+- [API reference](#api-reference)
+- [Filtering](#filtering)
+- [Pagination & sorting](#pagination--sorting)
+- [Soft delete](#soft-delete)
+- [Bulk operations](#bulk-operations)
+- [Transactions](#transactions)
+- [Full-text search (PostgreSQL)](#full-text-search-postgresql)
+- [Lifecycle hooks & validation](#lifecycle-hooks--validation)
+- [Testing](#testing)
+- [For AI agents / LLM tools](#for-ai-agents--llm-tools)
+
+---
 
 ## Features
 
-- 🚀 **Complete CRUD Operations** - find, create, update, delete, and more
-- 🗃️ **SQL Database Support** - PostgreSQL & MySQL with dialect-specific optimizations
-- ⚡ **Type-Safe** - Full TypeScript support with generics
-- 🔄 **Soft Delete** - Built-in soft delete with restore functionality
-- 📦 **Bulk Operations** - Mass create, update, delete with transaction support
-- 🔍 **Advanced Querying** - Filtering, pagination, sorting, full-text search
-- 🎯 **NestJS Native** - Seamless integration with NestJS dependency injection
-- 🧪 **Test Utilities** - Comprehensive testing helpers
-- 🛡️ **Production Ready** - Error handling, transactions, and validation hooks
+- 🚀 **Complete CRUD** — `find`, `findOne`, `findAll`, `create`, `update`, `delete`, and more
+- 🧩 **Configure once** — `forRoot()` owns the connection; services only declare a table
+- ⚡ **Type-safe** — generics over your entity, create/update DTOs and filter types
+- 🗃️ **PostgreSQL & MySQL** — dialect-aware (`RETURNING` vs `insertId`)
+- 🔄 **Soft delete** — opt-in soft delete with `restore`
+- 📦 **Bulk operations** — mass create/update/delete inside a transaction
+- 🔍 **Rich filtering** — equality, `in`, comparison operators, `like`/`ilike`, null checks
+- 🔎 **Full-text search** — PostgreSQL `tsvector`/`tsquery`
+- 🪝 **Hooks & validation** — `before*`/`after*` hooks, `validateCreate`/`validateUpdate`
+- 🧪 **Test utilities** — mock db/table/entity factories
+
+---
 
 ## Installation
 
@@ -20,385 +62,489 @@ A complete, type-safe CRUD abstraction layer for Drizzle ORM in NestJS applicati
 npm install nestjs-drizzle-crud
 ```
 
-# Quick Start
+Peer dependencies (install the ones you use):
 
-## 1. Basic Setup 
+```bash
+# always
+npm install @nestjs/common @nestjs/core drizzle-orm reflect-metadata
 
-``` typescript
+# PostgreSQL (also required if you use `connectionString` with dialect 'postgresql')
+npm install postgres
+
+# MySQL
+npm install mysql2
+```
+
+> `postgres` is an **optional** peer dependency. It's only needed when you let the
+> module build the connection from a `connectionString` for the `postgresql` dialect.
+> If you pass a pre-built `db` instead, you don't need it.
+
+---
+
+## Quick start
+
+### 1. Define your Drizzle schema
+
+```typescript
+// db/schema.ts
+import { pgTable, serial, varchar } from 'drizzle-orm/pg-core';
+
+export const users = pgTable('users', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 100 }).notNull(),
+  email: varchar('email', { length: 255 }).notNull().unique(),
+});
+
+export const schema = { users };
+export type User = typeof users.$inferSelect;
+```
+
+### 2. Configure the module once
+
+```typescript
 // app.module.ts
 import { Module } from '@nestjs/common';
 import { DrizzleCrudModule } from 'nestjs-drizzle-crud';
+import { schema } from './db/schema';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
     DrizzleCrudModule.forRoot({
-      dialect: 'postgresql', // or 'mysql'
-      defaults: {
-        softDelete: true,
-        timestamps: true,
-        pagination: { defaultLimit: 20, maxLimit: 100 },
-      },
+      dialect: 'postgresql',
+      connectionString: process.env.DATABASE_URL,
+      schema,
     }),
+    UsersModule,
   ],
 })
 export class AppModule {}
 ```
 
-## 2. Create a CRUD Service
+The connection is created here, exposed globally, and closed automatically on
+application shutdown (when the module built it from a `connectionString`).
 
-``` typescript
-// user.service.ts
-import { Injectable } from '@nestjs/common';
+### 3. Create a service
+
+```typescript
+// users/users.service.ts
 import { SqlBaseCrudService } from 'nestjs-drizzle-crud';
+import type { User } from '../db/schema';
 
-// Your Drizzle table schema
-export const users = {
-  id: 'id',
-  name: 'name',
-  email: 'email',
-  password: 'password',
-  created_at: 'created_at',
-  updated_at: 'updated_at',
-  deleted_at: 'deleted_at',
-};
+export interface CreateUserDto { name: string; email: string }
+export interface UpdateUserDto { name?: string; email?: string }
+export interface UserFilters { name?: string; email?: string }
 
-// DTOs and interfaces
-export interface User {
-  id: number;
-  name: string;
-  email: string;
-  password: string;
-  created_at: Date;
-  updated_at: Date;
-  deleted_at: Date | null;
-}
-
-export interface CreateUserDto {
-  name: string;
-  email: string;
-  password: string;
-}
-
-export interface UpdateUserDto {
-  name?: string;
-  email?: string;
-  password?: string;
-}
-
-export interface UserFilters {
-  name?: string;
-  email?: string;
-}
-
-@Injectable()
-export class UserService extends SqlBaseCrudService<User, CreateUserDto, UpdateUserDto, UserFilters> {
-  constructor(@Inject('DRIZZLE_DB') db: any) {
-    super({
-      dialect: 'postgresql',
-      db,
-      table: users,
-      primaryKey: 'id',
-      primaryKeyType: 'serial',
-      softDelete: { enabled: true, column: 'deleted_at' },
-      timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' },
-    });
-  }
-
-  protected async validateCreate(data: CreateUserDto): Promise<void> {
-    if (!data.email.includes('@')) {
-      throw new Error('Invalid email format');
-    }
-  }
-
-  protected async validateUpdate(id: number, data: UpdateUserDto): Promise<void> {
-    if (data.email && !data.email.includes('@')) {
-      throw new Error('Invalid email format');
-    }
-  }
-
-  protected mapCreateDtoToEntity(data: CreateUserDto): Record<string, any> {
-    return {
-      ...data,
-      created_at: new Date(),
-      updated_at: new Date(),
-    };
-  }
-
-  protected mapUpdateDtoToEntity(data: UpdateUserDto): Record<string, any> {
-    return {
-      ...data,
-      updated_at: new Date(),
-    };
-  }
-
-  // Custom methods
-  async findByEmail(email: string): Promise<User | null> {
-    return this.findOne({ email });
-  }
-}
+export class UsersService extends SqlBaseCrudService<
+  User,
+  CreateUserDto,
+  UpdateUserDto,
+  UserFilters
+> {}
 ```
 
-## 3. Use in Controller
+### 4. Bind the service to a table
 
-``` typescript
-// user.controller.ts
-import { Controller, Get, Post, Put, Delete, Body, Param, Query } from '@nestjs/common';
-import { UserService } from './user.service';
+```typescript
+// users/users.module.ts
+import { Module } from '@nestjs/common';
+import { DrizzleCrudModule } from 'nestjs-drizzle-crud';
+import { users } from '../db/schema';
+import { UsersController } from './users.controller';
+import { UsersService } from './users.service';
+
+@Module({
+  imports: [
+    DrizzleCrudModule.forFeature([{ service: UsersService, table: users }]),
+  ],
+  controllers: [UsersController],
+})
+export class UsersModule {}
+```
+
+### 5. Use it in a controller
+
+```typescript
+// users/users.controller.ts
+import { Body, Controller, Delete, Get, Param, ParseIntPipe, Post, Put, Query } from '@nestjs/common';
+import { CreateUserDto, UpdateUserDto, UsersService } from './users.service';
 
 @Controller('users')
-export class UserController {
-  constructor(private readonly userService: UserService) {}
+export class UsersController {
+  constructor(private readonly users: UsersService) {}
 
   @Get()
-  async findAll(
-    @Query('page') page: number = 1,
-    @Query('limit') limit: number = 20
-  ) {
-    return this.userService.findAll({}, { page, limit });
+  findAll(@Query('page') page = '1', @Query('limit') limit = '20') {
+    return this.users.findAll({}, { page: +page, limit: +limit });
   }
 
   @Get(':id')
-  async find(@Param('id') id: string) {
-    return this.userService.find(+id);
+  find(@Param('id', ParseIntPipe) id: number) {
+    return this.users.find(id);
   }
 
   @Post()
-  async create(@Body() createUserDto: CreateUserDto) {
-    return this.userService.create(createUserDto);
+  create(@Body() dto: CreateUserDto) {
+    return this.users.create(dto);
   }
 
   @Put(':id')
-  async update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
-    return this.userService.update(+id, updateUserDto);
+  update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateUserDto) {
+    return this.users.update(id, dto);
   }
 
   @Delete(':id')
-  async delete(@Param('id') id: string) {
-    return this.userService.softDelete(+id);
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.users.delete(id);
   }
 }
 ```
 
-## Advanced Usage
+---
 
-### Bulk Operations
+## Configuration
 
-``` typescript
-// Mass create users
-const users = await this.userService.massCreate(userDtos);
+### `DrizzleCrudModule.forRoot(config)`
 
-// Mass update
-const updatedUsers = await this.userService.massUpdate(
-  [1, 2, 3], 
-  { status: 'active' }
-);
+| Field | Type | Description |
+|---|---|---|
+| `dialect` | `'postgresql' \| 'mysql'` | **Required.** Database dialect. |
+| `connectionString` | `string` | Connection string. The module builds the connection (PostgreSQL only). |
+| `db` | `Drizzle instance` | Alternatively, pass a Drizzle instance you built yourself (any dialect). |
+| `schema` | `Record<string, unknown>` | Drizzle schema, used when building from `connectionString`. |
+| `defaults.softDelete` | `boolean` | Enable soft delete for all entities (default `true`). |
+| `defaults.timestamps` | `boolean` | Auto-manage `created_at`/`updated_at` for all entities (default `true`). |
+| `defaults.pagination` | `{ defaultLimit, maxLimit }` | Pagination defaults (default `{ 20, 100 }`). |
+| `sql` | `{ caseSensitive, useReturning, jsonSupport, enableFullTextSearch }` | Dialect tuning. `useReturning` defaults to `true` for PostgreSQL, `false` for MySQL. |
 
-// Mass soft delete
-await this.userService.massSoftDelete([1, 2, 3]);
-```
+> **Provide exactly one of `connectionString` or `db`.** If your tables have no
+> `created_at`/`updated_at`/`deleted_at` columns, set
+> `defaults: { softDelete: false, timestamps: false }`.
 
-### Full-Text Search (PostgreSQL)
+**Build the connection yourself (any dialect, recommended for MySQL):**
 
-``` typescript
-const results = await this.userService.fullTextSearch(
-  'john doe',
-  ['name', 'email', 'bio']
-);
-```
+```typescript
+import { drizzle } from 'drizzle-orm/postgres-js';
+import postgres from 'postgres';
 
-### Transactions
-
-``` typescript
-await this.userService.executeSqlTransaction(async (tx) => {
-  await this.userService.create(user1, { transaction: tx });
-  await this.userService.create(user2, { transaction: tx });
+DrizzleCrudModule.forRoot({
+  dialect: 'postgresql',
+  db: drizzle(postgres(process.env.DATABASE_URL!), { schema }),
 });
 ```
 
-### Advanced Filtering
+### `DrizzleCrudModule.forRootAsync(options)`
 
-``` typescript
-// Complex filters
-const results = await this.userService.findAll({
-  name: { like: 'John%' },
-  age: { gt: 18, lt: 65 },
-  status: { in: ['active', 'pending'] }
-});
-
-// With relations and selection
-const user = await this.userService.find(1, {
-  relations: ['profile', 'posts'],
-  select: ['id', 'name', 'email']
-});
-```
-
-# Module Configuration
-## Async Configuration
-
-``` typescript
+```typescript
 DrizzleCrudModule.forRootAsync({
   imports: [ConfigModule],
-  useFactory: async (configService: ConfigService) => ({
-    dialect: configService.get('DATABASE_DIALECT'),
-    defaults: {
-      softDelete: true,
-      timestamps: true,
-    },
-  }),
   inject: [ConfigService],
-}),
-```
-
-## Multiple Entities
-
-``` typescript
-DrizzleCrudModule.forFeature([
-  {
-    name: 'User',
-    table: usersTable,
-    service: UserService,
-    config: { primaryKey: 'id' },
-  },
-  {
-    name: 'Post', 
-    table: postsTable,
-    service: PostService,
-    config: { softDelete: { enabled: false } },
-  },
-]),
-```
-
-# Testing
-``` typescript
-// user.service.spec.ts
-import { TestCrudFactory } from 'nestjs-drizzle-crud/test-utils';
-
-describe('UserService', () => {
-  let service: UserService;
-  let mockDb: any;
-
-  beforeEach(() => {
-    mockDb = TestCrudFactory.createMockDb();
-    const mockTable = TestCrudFactory.createMockTable();
-    
-    service = TestCrudFactory.createTestService(
-      UserService,
-      mockDb,
-      mockTable
-    );
-  });
-
-  it('should create user', async () => {
-    const createDto = { name: 'John', email: 'john@test.com' };
-    const mockEntity = TestCrudFactory.createMockEntity();
-    
-    mockDb.insert.mockReturnValue({
-      values: jest.fn().mockReturnThis(),
-      returning: jest.fn().mockResolvedValue([mockEntity]),
-    });
-
-    const result = await service.create(createDto);
-    expect(result).toEqual(mockEntity);
-  });
+  useFactory: (cfg: ConfigService) => ({
+    dialect: 'postgresql',
+    connectionString: cfg.get('DATABASE_URL'),
+    schema,
+  }),
 });
 ```
 
-# API Reference
-## Core Methods
+### `DrizzleCrudModule.forFeature(entities)`
 
-* find(id, options?) - Find by primary key
+Registers one or more services and binds each to its table. Per-entity overrides
+go in `config`:
 
-* findOne(where, options?) - Find by criteria
+```typescript
+DrizzleCrudModule.forFeature([
+  { service: UsersService, table: users },
+  {
+    service: PostsService,
+    table: posts,
+    config: {
+      primaryKey: 'uuid',
+      primaryKeyType: 'uuid',
+      softDelete: { enabled: true, column: 'deleted_at' },
+    },
+  },
+]);
+```
 
-* findAll(filters?, pagination?, options?) - Find all with filtering & pagination
+Anything in `config` overrides the project defaults for that entity. The shape is
+[`SqlCrudConfig`](#sqlcrudconfig) minus `db`/`dialect`.
 
-* create(data, options?) - Create new entity
+---
 
-* update(id, data, options?) - Update entity
+## Defining services
 
-* softDelete(id, options?) - Soft delete entity
+The minimal service is an empty class — connection, dialect and defaults are
+injected by the module:
 
-* restore(id, options?) - Restore soft-deleted entity
+```typescript
+export class UsersService extends SqlBaseCrudService<User> {}
+```
 
-* delete(id, options?) - Hard delete entity
+Add custom behaviour by overriding hooks (see [Lifecycle hooks](#lifecycle-hooks--validation))
+or add your own methods:
 
-## Bulk Methods
-* massCreate(data[], options?) - Create multiple entities
+```typescript
+export class UsersService extends SqlBaseCrudService<User, CreateUserDto, UpdateUserDto, UserFilters> {
+  findByEmail(email: string) {
+    return this.findOne({ email } as Partial<User>);
+  }
 
-* massUpdate(ids[], data, options?) - Update multiple entities
-
-* massSoftDelete(ids[], options?) - Soft delete multiple entities
-
-* massRestore(ids[], options?) - Restore multiple entities
-
-* massDelete(ids[], options?) - Hard delete multiple entities
-
-## Utility Methods
-
-* exists(id, options?) - Check if entity exists
-
-* count(filters?, options?) - Count entities
-
-* fullTextSearch(term, columns, pagination?, options?) - Full-text search (PostgreSQL)
-
-
-# Configuration Options
-``` typescript
-interface SqlCrudConfig {
-  dialect: 'postgresql' | 'mysql';
-  db: any; // Drizzle database instance
-  table: any; // Drizzle table
-  
-  // Primary key configuration
-  primaryKey: string;
-  primaryKeyType: 'serial' | 'bigserial' | 'int' | 'bigint' | 'uuid';
-  
-  // Soft delete
-  softDelete?: {
-    enabled: boolean;
-    column: string;
-  };
-  
-  // Timestamps
-  timestamps?: {
-    createdAt: string;
-    updatedAt: string;
-  };
-  
-  // Pagination
-  pagination?: {
-    defaultLimit: number;
-    maxLimit: number;
-  };
+  protected async validateCreate(data: CreateUserDto): Promise<void> {
+    if (!data.email.includes('@')) throw new Error('Invalid email');
+  }
 }
 ```
 
-# Supported Versions
-* NestJS: >=10.0.0
+---
 
-* Drizzle ORM: >=0.28.0
+## API reference
 
-* Node.js: >=18.0.0
+`SqlBaseCrudService<T, CreateDto = Partial<T>, UpdateDto = Partial<T>, FilterDto = Partial<T>>`
 
-* PostgreSQL: >=12.0
+### Read
 
-* MySQL: >=8.0
+| Method | Returns | Notes |
+|---|---|---|
+| `find(id, options?)` | `Promise<T \| null>` | By primary key. Skips soft-deleted rows. |
+| `findOne(where, options?)` | `Promise<T \| null>` | `where` is a `Partial<T>` (equality only). |
+| `findAll(filters?, pagination?, options?)` | `Promise<{ data: T[]; total: number; page: number; limit: number }>` | See [Filtering](#filtering) / [Pagination](#pagination--sorting). |
+| `exists(id, options?)` | `Promise<boolean>` | |
+| `count(filters?, options?)` | `Promise<number>` | |
 
-# Contributing
-Contributions are welcome! Please feel free to submit a Pull Request.
+### Write
 
-# License
+| Method | Returns | Notes |
+|---|---|---|
+| `create(data, options?)` | `Promise<T>` | Runs `validateCreate` → `beforeCreate` → insert → `afterCreate`. |
+| `update(id, data, options?)` | `Promise<T>` | Throws `EntityNotFoundException` if missing. |
+| `delete(id, options?)` | `Promise<boolean>` | Hard delete. |
+| `softDelete(id, options?)` | `Promise<boolean>` | Requires soft delete enabled. |
+| `restore(id, options?)` | `Promise<T>` | Clears the soft-delete column. |
+
+### Bulk (run inside a transaction)
+
+| Method | Returns |
+|---|---|
+| `massCreate(data[], options?)` | `Promise<T[]>` |
+| `massUpdate(ids[], data, options?)` | `Promise<T[]>` |
+| `massSoftDelete(ids[], options?)` | `Promise<boolean>` |
+| `massRestore(ids[], options?)` | `Promise<T[]>` |
+| `massDelete(ids[], options?)` | `Promise<boolean>` |
+
+### Search
+
+| Method | Returns |
+|---|---|
+| `fullTextSearch(term, columns, pagination?, options?)` | `Promise<{ data: T[]; total: number }>` (PostgreSQL only) |
+
+### `SqlOperationOptions`
+
+```typescript
+interface SqlOperationOptions {
+  transaction?: any;            // run within an existing transaction
+  select?: string[];            // return only these columns
+  relations?: string[];         // reserved — not yet implemented (no-op)
+  hooks?: { skipBefore?: boolean; skipAfter?: boolean };
+  lock?: 'update' | 'share' | 'none';
+  forNoKeyUpdate?: boolean;
+}
+```
+
+> ⚠️ `relations` is reserved for future use and currently does nothing.
+
+---
+
+## Filtering
+
+`findAll(filters)` / `count(filters)` accept an object keyed by column name.
+Unknown keys and `null`/`undefined` values are ignored.
+
+```typescript
+await service.findAll({
+  status: 'active',                // string: exact match (case-insensitive when sql.caseSensitive === false)
+  role: ['admin', 'editor'],       // array: IN (...)
+  age: { gte: 18, lt: 65 },        // comparison operators
+  name: { ilike: 'jo%' },          // pattern match — you supply the wildcards
+  deleted_at: { isNull: true },    // null checks
+});
+```
+
+**Operators** (inside an object value):
+
+| Operator | SQL |
+|---|---|
+| `gt` / `gte` / `lt` / `lte` | `>` `>=` `<` `<=` |
+| `neq` | `<>` |
+| `like` / `ilike` | `LIKE` / `ILIKE` — **pass your own `%` wildcards** |
+| `in` | `IN (...)` |
+| `isNull` / `isNotNull` | `IS NULL` / `IS NOT NULL` |
+
+> A bare string value is an **exact** match. When `sql.caseSensitive` is `false`
+> (the default) it uses `ILIKE` *without* wildcards (case-insensitive exact match).
+> For partial matching, use the explicit `like`/`ilike` operators with wildcards.
+
+---
+
+## Pagination & sorting
+
+```typescript
+await service.findAll(
+  {},
+  { page: 2, limit: 25, sortBy: 'created_at', sortOrder: 'desc' },
+);
+// → { data: [...], total: 240, page: 2, limit: 25 }
+```
+
+`limit` is capped at `pagination.maxLimit`. `sortOrder` defaults to `'desc'`.
+
+---
+
+## Soft delete
+
+Enable per-project via `defaults.softDelete` or per-entity via `forFeature` config:
+
+```typescript
+{ service: UsersService, table: users, config: { softDelete: { enabled: true, column: 'deleted_at' } } }
+```
+
+- `softDelete(id)` sets the column to the current timestamp.
+- `restore(id)` sets it back to `null`.
+- `find`/`findOne`/`findAll`/`count` automatically exclude soft-deleted rows.
+
+---
+
+## Bulk operations
+
+```typescript
+await service.massCreate([dto1, dto2, dto3]);
+await service.massUpdate([1, 2, 3], { status: 'archived' });
+await service.massSoftDelete([1, 2, 3]);
+```
+
+All bulk methods run inside a single transaction; if any row fails, a
+`BulkOperationException` (carrying the per-row errors) is thrown and the
+transaction rolls back.
+
+---
+
+## Transactions
+
+```typescript
+await service.executeSqlTransaction(async (tx) => {
+  const user = await service.create(userDto, { transaction: tx });
+  await profileService.create({ userId: user.id }, { transaction: tx });
+});
+```
+
+Pass `{ transaction: tx }` in `options` to any method to enlist it.
+
+---
+
+## Full-text search (PostgreSQL)
+
+```typescript
+const { data, total } = await service.fullTextSearch(
+  'john doe',
+  ['name', 'email', 'bio'],
+  { page: 1, limit: 20 },
+);
+```
+
+Builds `to_tsvector(...) @@ plainto_tsquery(...)` across the given columns and
+orders by `ts_rank`. Throws if the dialect is not `postgresql`.
+
+---
+
+## Lifecycle hooks & validation
+
+Override any of these `protected` methods in your service (all are optional;
+defaults are no-op / pass-through):
+
+```typescript
+protected validateCreate(data: CreateDto): Promise<void>
+protected validateUpdate(id: any, data: UpdateDto): Promise<void>
+protected mapCreateDtoToEntity(data: CreateDto): Record<string, any>
+protected mapUpdateDtoToEntity(data: UpdateDto): Record<string, any>
+
+protected beforeCreate(data: CreateDto): Promise<CreateDto>
+protected afterCreate(entity: T): Promise<void>
+protected beforeUpdate(id: any, data: UpdateDto): Promise<UpdateDto>
+protected afterUpdate(entity: T): Promise<void>
+protected beforeDelete(id: any): Promise<void>
+protected afterDelete(id: any): Promise<void>
+protected beforeSoftDelete(id: any): Promise<void>
+protected afterSoftDelete(id: any): Promise<void>
+protected beforeRestore(id: any): Promise<void>
+protected afterRestore(entity: T): Promise<void>
+```
+
+`mapCreateDtoToEntity` / `mapUpdateDtoToEntity` transform the incoming DTO into the
+row to persist (default returns a shallow copy). When `timestamps` is enabled, the
+service stamps `created_at`/`updated_at` automatically.
+
+---
+
+## Testing
+
+```typescript
+import { TestCrudFactory } from 'nestjs-drizzle-crud';
+
+const mockDb = TestCrudFactory.createMockDb();
+const mockTable = TestCrudFactory.createMockTable();
+const service = TestCrudFactory.createTestService(UsersService, mockDb, mockTable);
+```
+
+`TestCrudFactory` provides `createMockDb()`, `createMockTable()`,
+`createMockEntity()` and `createTestService()` for unit tests without a database.
+
+---
+
+## For AI agents / LLM tools
+
+Concise, accurate facts for code generation. Prefer these over guessing.
+
+**Package:** `nestjs-drizzle-crud` · **Peers:** `@nestjs/common`, `@nestjs/core`, `drizzle-orm`, `reflect-metadata`; optional `postgres` (PG) / `mysql2` (MySQL).
+
+**Setup is two steps and no per-service connection wiring:**
+1. `DrizzleCrudModule.forRoot({ dialect, connectionString | db, schema, defaults })` once in `AppModule`.
+2. `DrizzleCrudModule.forFeature([{ service, table, config? }])` in each feature module.
+
+**A service is an empty subclass — do NOT inject the db or pass `dialect`/`db`:**
+```typescript
+export class XService extends SqlBaseCrudService<X, CreateXDto, UpdateXDto, XFilters> {}
+```
+
+**Rules / gotchas:**
+- Generics order: `SqlBaseCrudService<Entity, CreateDto, UpdateDto, FilterDto>`. All but `Entity` default to `Partial<Entity>`.
+- Do **not** add an `@Inject('DRIZZLE_DB')` constructor — `forFeature` constructs the service for you. Adding a constructor that calls `super({...})` is the legacy/manual pattern and is unnecessary.
+- The table is passed in `forFeature`, **not** in the service.
+- If tables lack timestamp/soft-delete columns, set `defaults: { softDelete: false, timestamps: false }`, else inserts will reference non-existent columns.
+- `findAll` returns `{ data, total, page, limit }` — not a bare array.
+- Filter operators live inside an object value: `{ age: { gte: 18 } }`. `like`/`ilike` require caller-supplied `%` wildcards; a bare string is exact match.
+- `delete`/`softDelete` return `boolean`; `update`/`restore` return the entity and throw `EntityNotFoundException` when missing.
+- `relations` option is not implemented (no-op).
+- Full-text search is PostgreSQL-only.
+- Exports: `SqlBaseCrudService`, `DrizzleCrudModule`, `DRIZZLE_DB`, `DRIZZLE_CRUD_CONFIG`, `TestCrudFactory`, exceptions (`EntityNotFoundException`, `BulkOperationException`, …), and types (`SqlCrudConfig`, `SqlOperationOptions`, `DrizzleCrudConfig`, `CrudFeature`, `SqlDialect`, `PrimaryKeyType`).
+
+### `SqlCrudConfig`
+
+```typescript
+interface SqlCrudConfig {
+  dialect: 'postgresql' | 'mysql';
+  db: any;                         // Drizzle instance (injected by forFeature)
+  table: any;                      // Drizzle table (set by forFeature)
+  primaryKey: string;              // default 'id'
+  primaryKeyType: 'serial' | 'bigserial' | 'int' | 'bigint' | 'uuid';
+  softDelete?: { enabled: boolean; column: string };
+  timestamps?: { createdAt: string; updatedAt: string };
+  pagination?: { defaultLimit: number; maxLimit: number };
+  sql?: { caseSensitive: boolean; useReturning: boolean; jsonSupport: boolean; enableFullTextSearch: boolean };
+}
+```
+
+---
+
+## License
+
 MIT
-
-
-This README provides:
-
-1. **Clear installation instructions**
-2. **Quick start guide** with code examples
-3. **Advanced usage patterns**
-4. **Comprehensive API documentation**
-5. **Testing examples**
-6. **Configuration reference**
-7. **Version compatibility**
-
-It's ready to use and will help users understand how to implement your package quickly!

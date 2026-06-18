@@ -4,6 +4,7 @@ import {
 	asc,
 	desc,
 	eq,
+	getTableName,
 	gt,
 	gte,
 	ilike,
@@ -52,6 +53,39 @@ export abstract class SqlBaseCrudService<
 			enableFullTextSearch: false,
 		},
 	};
+	// Builds a Drizzle partial-select field map from a list of column names.
+	// Returns undefined when no selection is requested (select all columns).
+	protected buildSelectFields(
+		select: string[],
+	): Record<string, any> | undefined {
+		if (!select || select.length === 0) return undefined;
+		const fields: Record<string, any> = {};
+		for (const field of select) {
+			const column = this.config.table[field];
+			if (column) fields[field] = column;
+		}
+		return Object.keys(fields).length > 0 ? fields : undefined;
+	}
+
+	// Normalizes the various driver result shapes (postgres-js, node-postgres,
+	// mysql2) into a simple "did this mutation affect any rows" boolean.
+	protected wasAffected(result: any): boolean {
+		if (result == null) return false;
+		if (Array.isArray(result)) {
+			// postgres-js exposes affected count on `.count`; otherwise use rows.
+			if (typeof (result as any).count === "number")
+				return (result as any).count > 0;
+			// mysql2 returns [ResultSetHeader, ...]
+			if (result[0] && typeof result[0].affectedRows === "number")
+				return result[0].affectedRows > 0;
+			return result.length > 0;
+		}
+		if (typeof result.rowCount === "number") return result.rowCount > 0; // node-postgres
+		if (typeof result.rowsAffected === "number") return result.rowsAffected > 0;
+		if (typeof result.affectedRows === "number") return result.affectedRows > 0;
+		return false;
+	}
+
 	protected buildWhereConditionsFromPartial(where: Partial<T>): any[] {
 		if (!where) return [];
 
@@ -86,11 +120,17 @@ export abstract class SqlBaseCrudService<
 		}
 	}
 
-	// Abstract methods
-	protected abstract validateCreate(data: CreateDto): Promise<void>;
-	protected abstract validateUpdate(id: any, data: UpdateDto): Promise<void>;
-	protected abstract mapCreateDtoToEntity(data: CreateDto): Record<string, any>;
-	protected abstract mapUpdateDtoToEntity(data: UpdateDto): Record<string, any>;
+	// Overridable hooks for validation and DTO -> entity mapping. Defaults are
+	// no-op / pass-through so a concrete service only needs to declare its
+	// table; override these when an entity needs custom behaviour.
+	protected async validateCreate(_data: CreateDto): Promise<void> {}
+	protected async validateUpdate(_id: any, _data: UpdateDto): Promise<void> {}
+	protected mapCreateDtoToEntity(data: CreateDto): Record<string, any> {
+		return { ...(data as Record<string, any>) };
+	}
+	protected mapUpdateDtoToEntity(data: UpdateDto): Record<string, any> {
+		return { ...(data as Record<string, any>) };
+	}
 
 	// Optional hooks
 	protected async beforeCreate(data: CreateDto): Promise<CreateDto> {
@@ -113,7 +153,10 @@ export abstract class SqlBaseCrudService<
 		const { transaction, relations = [], select = [] } = options || {};
 		const db = transaction || this.config.db;
 
-		let query = db.select().from(this.config.table);
+		const fields = this.buildSelectFields(select);
+		let query = fields
+			? db.select(fields).from(this.config.table)
+			: db.select().from(this.config.table);
 		const conditions = [eq(this.config.table[this.config.primaryKey], id)];
 
 		if (this.config.softDelete?.enabled) {
@@ -121,14 +164,6 @@ export abstract class SqlBaseCrudService<
 		}
 
 		query = query.where(and(...conditions));
-
-		if (select.length > 0) {
-			const fields = select.reduce((acc, field) => {
-				acc[field] = this.config.table[field];
-				return acc;
-			}, {} as any);
-			query = query.fields(fields);
-		}
 
 		if (relations.length > 0) {
 			query = this.applyRelations(query, relations);
@@ -145,7 +180,11 @@ export abstract class SqlBaseCrudService<
 	): Promise<T | null> {
 		const { transaction, relations = [], select = [] } = options || {};
 		const db = transaction || this.config.db;
-		let query = db.select().from(this.config.table);
+
+		const fields = this.buildSelectFields(select);
+		let query = fields
+			? db.select(fields).from(this.config.table)
+			: db.select().from(this.config.table);
 
 		// Build WHERE conditions from Partial<T>
 		const conditions = this.buildWhereConditionsFromPartial(where);
@@ -155,14 +194,6 @@ export abstract class SqlBaseCrudService<
 		}
 
 		query = query.where(and(...conditions));
-
-		if (select.length > 0) {
-			const fields = select.reduce((acc, field) => {
-				acc[field] = this.config.table[field];
-				return acc;
-			}, {} as any);
-			query = query.fields(fields);
-		}
 
 		if (relations.length > 0) {
 			query = this.applyRelations(query, relations);
@@ -190,7 +221,10 @@ export abstract class SqlBaseCrudService<
 		const offset = (page - 1) * safeLimit;
 		const db = transaction || this.config.db;
 
-		let dataQuery = db.select().from(this.config.table);
+		const fields = this.buildSelectFields(select);
+		let dataQuery = fields
+			? db.select(fields).from(this.config.table)
+			: db.select().from(this.config.table);
 		const conditions = this.buildWhereConditions(filters);
 
 		if (this.config.softDelete?.enabled) {
@@ -213,14 +247,6 @@ export abstract class SqlBaseCrudService<
 
 		if (relations.length > 0) {
 			dataQuery = this.applyRelations(dataQuery, relations);
-		}
-
-		if (select.length > 0) {
-			const fields = select.reduce((acc, field) => {
-				acc[field] = this.config.table[field];
-				return acc;
-			}, {} as any);
-			dataQuery = dataQuery.fields(fields);
 		}
 
 		let countQuery = db
@@ -335,9 +361,7 @@ export abstract class SqlBaseCrudService<
 
 		if (this.config.sql?.useReturning) updateQuery = updateQuery.returning();
 		const result = await updateQuery;
-		const success = Array.isArray(result)
-			? result.length > 0
-			: result[0].affectedRows > 0;
+		const success = this.wasAffected(result);
 
 		if (success && !hooks.skipAfter) await this.afterSoftDelete(id);
 		return success;
@@ -395,9 +419,7 @@ export abstract class SqlBaseCrudService<
 			.where(eq(this.config.table[this.config.primaryKey], id));
 
 		const result = await deleteQuery;
-		const success = Array.isArray(result)
-			? result.length > 0
-			: result[0].affectedRows > 0;
+		const success = this.wasAffected(result);
 
 		if (success && !hooks.skipAfter) await this.afterDelete(id);
 		return success;
@@ -565,7 +587,9 @@ export abstract class SqlBaseCrudService<
 				typeof value === "string" &&
 				this.config.sql?.caseSensitive === false
 			) {
-				conditions.push(ilike(column, `%${value}%`));
+				// Case-insensitive *exact* match. Use the `{ like: ... }` /
+				// `{ ilike: ... }` operators explicitly for pattern matching.
+				conditions.push(ilike(column, value));
 			} else if (typeof value === "object" && value !== null) {
 				this.applyComplexFilter(conditions, column, value);
 			} else {
@@ -598,10 +622,11 @@ export abstract class SqlBaseCrudService<
 					conditions.push(ne(column, value));
 					break;
 				case "like":
-					conditions.push(like(column, `%${value}%`));
+					// Caller supplies the pattern (e.g. 'John%'); do not re-wrap.
+					conditions.push(like(column, value as string));
 					break;
 				case "ilike":
-					conditions.push(ilike(column, `%${value}%`));
+					conditions.push(ilike(column, value as string));
 					break;
 				case "in":
 					conditions.push(inArray(column, value as any[]));
@@ -630,7 +655,14 @@ export abstract class SqlBaseCrudService<
 	}
 
 	protected getEntityName(): string {
-		return this.config.table.constructor.name || "Entity";
+		// Resolve the real table name from the Drizzle table metadata. Falls back
+		// to "Entity" for plain-object tables (e.g. in tests) where the Drizzle
+		// metadata symbols are absent.
+		try {
+			return getTableName(this.config.table) || "Entity";
+		} catch {
+			return "Entity";
+		}
 	}
 
 	// SQL-Specific Enhancements
@@ -646,16 +678,23 @@ export abstract class SqlBaseCrudService<
 
 		const { transaction } = options || {};
 		const db = transaction || this.config.db;
-		const tsVectorColumns = searchColumns
-			.map((col) => sql`to_tsvector('english', ${this.config.table[col]})`)
-			.join(" || ");
+		// Combine the per-column tsvectors into a single SQL expression. Using
+		// sql.join keeps the column references as bound SQL chunks instead of
+		// stringifying them (which Array#join + sql.raw did, producing invalid
+		// SQL and an injection vector).
+		const tsVector = sql.join(
+			searchColumns.map(
+				(col) => sql`to_tsvector('english', ${this.config.table[col]})`,
+			),
+			sql` || `,
+		);
 		const tsQuery = sql`plainto_tsquery('english', ${searchTerm})`;
 
 		let query = db
 			.select()
 			.from(this.config.table)
-			.where(sql`${sql.raw(tsVectorColumns)} @@ ${tsQuery}`)
-			.orderBy(sql`ts_rank(${sql.raw(tsVectorColumns)}, ${tsQuery}) DESC`);
+			.where(sql`${tsVector} @@ ${tsQuery}`)
+			.orderBy(sql`ts_rank(${tsVector}, ${tsQuery}) DESC`);
 
 		if (pagination) {
 			const { page = 1, limit = this.config.pagination!.defaultLimit! } =
@@ -669,7 +708,7 @@ export abstract class SqlBaseCrudService<
 		const countQuery = db
 			.select({ count: sql<number>`count(*)` })
 			.from(this.config.table)
-			.where(sql`${sql.raw(tsVectorColumns)} @@ ${tsQuery}`);
+			.where(sql`${tsVector} @@ ${tsQuery}`);
 		const totalResult = await countQuery;
 		const total = parseInt(totalResult[0]?.count?.toString() || "0");
 

@@ -24,15 +24,18 @@ export {
 } from "drizzle-orm";
 // Core abstractions
 export { SqlBaseCrudService } from "./core/abstract/sql-base-crud.service";
-export { ICrudService } from "./core/interfaces/crud-service.interface";
-export { DrizzleCrudConfig } from "./core/interfaces/drizzle-crud-config.interface";
+export type { ICrudService } from "./core/interfaces/crud-service.interface";
+export type {
+	CrudFeature,
+	DrizzleCrudConfig,
+} from "./core/interfaces/drizzle-crud-config.interface";
 // Configuration interfaces
-export {
+export type {
 	SqlCrudConfig,
 	SqlOperationOptions,
 } from "./core/interfaces/sql-crud-config.interface";
 // Types
-export {
+export type {
 	PrimaryKeyType,
 	SqlDialect,
 	SqlFilterCondition,
@@ -51,6 +54,12 @@ export {
 } from "./exceptions/crud.exceptions";
 // Module
 export { DrizzleCrudModule } from "./modules/drizzle-crud.module";
+export {
+	DRIZZLE_CONNECTION,
+	DRIZZLE_CRUD_CONFIG,
+	DRIZZLE_DB,
+	DrizzleConnection,
+} from "./modules/drizzle-connection";
 // Test utilities
 export { BaseCrudSpecHelper } from "./test-utils/base-crud.spec-helper";
 export { TestCrudFactory } from "./test-utils/test-factory";

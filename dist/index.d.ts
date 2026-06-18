@@ -1,12 +1,13 @@
 export { and, asc, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, like, lt, lte, ne, or, sql, } from "drizzle-orm";
 export { SqlBaseCrudService } from "./core/abstract/sql-base-crud.service";
-export { ICrudService } from "./core/interfaces/crud-service.interface";
-export { DrizzleCrudConfig } from "./core/interfaces/drizzle-crud-config.interface";
-export { SqlCrudConfig, SqlOperationOptions, } from "./core/interfaces/sql-crud-config.interface";
-export { PrimaryKeyType, SqlDialect, SqlFilterCondition, } from "./core/types/sql.types";
+export type { ICrudService } from "./core/interfaces/crud-service.interface";
+export type { CrudFeature, DrizzleCrudConfig, } from "./core/interfaces/drizzle-crud-config.interface";
+export type { SqlCrudConfig, SqlOperationOptions, } from "./core/interfaces/sql-crud-config.interface";
+export type { PrimaryKeyType, SqlDialect, SqlFilterCondition, } from "./core/types/sql.types";
 export { CrudService } from "./decorators/crud-service.decorator";
 export { EntityConfig } from "./decorators/entity-config.decorator";
 export { BulkOperationException, DatabaseConnectionException, DuplicateEntityException, EntityNotFoundException, TransactionException, ValidationFailedException, } from "./exceptions/crud.exceptions";
 export { DrizzleCrudModule } from "./modules/drizzle-crud.module";
+export { DRIZZLE_CONNECTION, DRIZZLE_CRUD_CONFIG, DRIZZLE_DB, DrizzleConnection, } from "./modules/drizzle-connection";
 export { BaseCrudSpecHelper } from "./test-utils/base-crud.spec-helper";
 export { TestCrudFactory } from "./test-utils/test-factory";

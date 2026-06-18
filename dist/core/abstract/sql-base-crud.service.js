@@ -21,6 +21,35 @@ class SqlBaseCrudService {
             enableFullTextSearch: false,
         },
     };
+    buildSelectFields(select) {
+        if (!select || select.length === 0)
+            return undefined;
+        const fields = {};
+        for (const field of select) {
+            const column = this.config.table[field];
+            if (column)
+                fields[field] = column;
+        }
+        return Object.keys(fields).length > 0 ? fields : undefined;
+    }
+    wasAffected(result) {
+        if (result == null)
+            return false;
+        if (Array.isArray(result)) {
+            if (typeof result.count === "number")
+                return result.count > 0;
+            if (result[0] && typeof result[0].affectedRows === "number")
+                return result[0].affectedRows > 0;
+            return result.length > 0;
+        }
+        if (typeof result.rowCount === "number")
+            return result.rowCount > 0;
+        if (typeof result.rowsAffected === "number")
+            return result.rowsAffected > 0;
+        if (typeof result.affectedRows === "number")
+            return result.affectedRows > 0;
+        return false;
+    }
     buildWhereConditionsFromPartial(where) {
         if (!where)
             return [];
@@ -50,6 +79,14 @@ class SqlBaseCrudService {
             this.config.sql.useReturning = false;
         }
     }
+    async validateCreate(_data) { }
+    async validateUpdate(_id, _data) { }
+    mapCreateDtoToEntity(data) {
+        return { ...data };
+    }
+    mapUpdateDtoToEntity(data) {
+        return { ...data };
+    }
     async beforeCreate(data) {
         return data;
     }
@@ -67,19 +104,15 @@ class SqlBaseCrudService {
     async find(id, options) {
         const { transaction, relations = [], select = [] } = options || {};
         const db = transaction || this.config.db;
-        let query = db.select().from(this.config.table);
+        const fields = this.buildSelectFields(select);
+        let query = fields
+            ? db.select(fields).from(this.config.table)
+            : db.select().from(this.config.table);
         const conditions = [(0, drizzle_orm_1.eq)(this.config.table[this.config.primaryKey], id)];
         if (this.config.softDelete?.enabled) {
             conditions.push((0, drizzle_orm_1.isNull)(this.config.table[this.config.softDelete.column]));
         }
         query = query.where((0, drizzle_orm_1.and)(...conditions));
-        if (select.length > 0) {
-            const fields = select.reduce((acc, field) => {
-                acc[field] = this.config.table[field];
-                return acc;
-            }, {});
-            query = query.fields(fields);
-        }
         if (relations.length > 0) {
             query = this.applyRelations(query, relations);
         }
@@ -90,19 +123,15 @@ class SqlBaseCrudService {
     async findOne(where, options) {
         const { transaction, relations = [], select = [] } = options || {};
         const db = transaction || this.config.db;
-        let query = db.select().from(this.config.table);
+        const fields = this.buildSelectFields(select);
+        let query = fields
+            ? db.select(fields).from(this.config.table)
+            : db.select().from(this.config.table);
         const conditions = this.buildWhereConditionsFromPartial(where);
         if (this.config.softDelete?.enabled) {
             conditions.push((0, drizzle_orm_1.isNull)(this.config.table[this.config.softDelete.column]));
         }
         query = query.where((0, drizzle_orm_1.and)(...conditions));
-        if (select.length > 0) {
-            const fields = select.reduce((acc, field) => {
-                acc[field] = this.config.table[field];
-                return acc;
-            }, {});
-            query = query.fields(fields);
-        }
         if (relations.length > 0) {
             query = this.applyRelations(query, relations);
         }
@@ -116,7 +145,10 @@ class SqlBaseCrudService {
         const safeLimit = Math.min(limit, this.config.pagination.maxLimit);
         const offset = (page - 1) * safeLimit;
         const db = transaction || this.config.db;
-        let dataQuery = db.select().from(this.config.table);
+        const fields = this.buildSelectFields(select);
+        let dataQuery = fields
+            ? db.select(fields).from(this.config.table)
+            : db.select().from(this.config.table);
         const conditions = this.buildWhereConditions(filters);
         if (this.config.softDelete?.enabled) {
             conditions.push((0, drizzle_orm_1.isNull)(this.config.table[this.config.softDelete.column]));
@@ -132,13 +164,6 @@ class SqlBaseCrudService {
         dataQuery = dataQuery.limit(safeLimit).offset(offset);
         if (relations.length > 0) {
             dataQuery = this.applyRelations(dataQuery, relations);
-        }
-        if (select.length > 0) {
-            const fields = select.reduce((acc, field) => {
-                acc[field] = this.config.table[field];
-                return acc;
-            }, {});
-            dataQuery = dataQuery.fields(fields);
         }
         let countQuery = db
             .select({ count: (0, drizzle_orm_1.sql) `count(*)` })
@@ -243,9 +268,7 @@ class SqlBaseCrudService {
         if (this.config.sql?.useReturning)
             updateQuery = updateQuery.returning();
         const result = await updateQuery;
-        const success = Array.isArray(result)
-            ? result.length > 0
-            : result[0].affectedRows > 0;
+        const success = this.wasAffected(result);
         if (success && !hooks.skipAfter)
             await this.afterSoftDelete(id);
         return success;
@@ -300,9 +323,7 @@ class SqlBaseCrudService {
             .delete(this.config.table)
             .where((0, drizzle_orm_1.eq)(this.config.table[this.config.primaryKey], id));
         const result = await deleteQuery;
-        const success = Array.isArray(result)
-            ? result.length > 0
-            : result[0].affectedRows > 0;
+        const success = this.wasAffected(result);
         if (success && !hooks.skipAfter)
             await this.afterDelete(id);
         return success;
@@ -443,7 +464,7 @@ class SqlBaseCrudService {
             }
             else if (typeof value === "string" &&
                 this.config.sql?.caseSensitive === false) {
-                conditions.push((0, drizzle_orm_1.ilike)(column, `%${value}%`));
+                conditions.push((0, drizzle_orm_1.ilike)(column, value));
             }
             else if (typeof value === "object" && value !== null) {
                 this.applyComplexFilter(conditions, column, value);
@@ -473,10 +494,10 @@ class SqlBaseCrudService {
                     conditions.push((0, drizzle_orm_1.ne)(column, value));
                     break;
                 case "like":
-                    conditions.push((0, drizzle_orm_1.like)(column, `%${value}%`));
+                    conditions.push((0, drizzle_orm_1.like)(column, value));
                     break;
                 case "ilike":
-                    conditions.push((0, drizzle_orm_1.ilike)(column, `%${value}%`));
+                    conditions.push((0, drizzle_orm_1.ilike)(column, value));
                     break;
                 case "in":
                     conditions.push((0, drizzle_orm_1.inArray)(column, value));
@@ -499,7 +520,12 @@ class SqlBaseCrudService {
         return this.config.db.transaction(operation);
     }
     getEntityName() {
-        return this.config.table.constructor.name || "Entity";
+        try {
+            return (0, drizzle_orm_1.getTableName)(this.config.table) || "Entity";
+        }
+        catch {
+            return "Entity";
+        }
     }
     async fullTextSearch(searchTerm, searchColumns, pagination, options) {
         if (this.config.dialect !== "postgresql") {
@@ -507,15 +533,13 @@ class SqlBaseCrudService {
         }
         const { transaction } = options || {};
         const db = transaction || this.config.db;
-        const tsVectorColumns = searchColumns
-            .map((col) => (0, drizzle_orm_1.sql) `to_tsvector('english', ${this.config.table[col]})`)
-            .join(" || ");
+        const tsVector = drizzle_orm_1.sql.join(searchColumns.map((col) => (0, drizzle_orm_1.sql) `to_tsvector('english', ${this.config.table[col]})`), (0, drizzle_orm_1.sql) ` || `);
         const tsQuery = (0, drizzle_orm_1.sql) `plainto_tsquery('english', ${searchTerm})`;
         let query = db
             .select()
             .from(this.config.table)
-            .where((0, drizzle_orm_1.sql) `${drizzle_orm_1.sql.raw(tsVectorColumns)} @@ ${tsQuery}`)
-            .orderBy((0, drizzle_orm_1.sql) `ts_rank(${drizzle_orm_1.sql.raw(tsVectorColumns)}, ${tsQuery}) DESC`);
+            .where((0, drizzle_orm_1.sql) `${tsVector} @@ ${tsQuery}`)
+            .orderBy((0, drizzle_orm_1.sql) `ts_rank(${tsVector}, ${tsQuery}) DESC`);
         if (pagination) {
             const { page = 1, limit = this.config.pagination.defaultLimit } = pagination;
             const safeLimit = Math.min(limit, this.config.pagination.maxLimit);
@@ -526,7 +550,7 @@ class SqlBaseCrudService {
         const countQuery = db
             .select({ count: (0, drizzle_orm_1.sql) `count(*)` })
             .from(this.config.table)
-            .where((0, drizzle_orm_1.sql) `${drizzle_orm_1.sql.raw(tsVectorColumns)} @@ ${tsQuery}`);
+            .where((0, drizzle_orm_1.sql) `${tsVector} @@ ${tsQuery}`);
         const totalResult = await countQuery;
         const total = parseInt(totalResult[0]?.count?.toString() || "0");
         return { data, total };

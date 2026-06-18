@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TestCrudFactory = exports.BaseCrudSpecHelper = exports.DrizzleCrudModule = exports.ValidationFailedException = exports.TransactionException = exports.EntityNotFoundException = exports.DuplicateEntityException = exports.DatabaseConnectionException = exports.BulkOperationException = exports.EntityConfig = exports.CrudService = exports.SqlBaseCrudService = exports.sql = exports.or = exports.ne = exports.lte = exports.lt = exports.like = exports.isNull = exports.isNotNull = exports.inArray = exports.ilike = exports.gte = exports.gt = exports.eq = exports.desc = exports.asc = exports.and = void 0;
+exports.TestCrudFactory = exports.BaseCrudSpecHelper = exports.DrizzleConnection = exports.DRIZZLE_DB = exports.DRIZZLE_CRUD_CONFIG = exports.DRIZZLE_CONNECTION = exports.DrizzleCrudModule = exports.ValidationFailedException = exports.TransactionException = exports.EntityNotFoundException = exports.DuplicateEntityException = exports.DatabaseConnectionException = exports.BulkOperationException = exports.EntityConfig = exports.CrudService = exports.SqlBaseCrudService = exports.sql = exports.or = exports.ne = exports.lte = exports.lt = exports.like = exports.isNull = exports.isNotNull = exports.inArray = exports.ilike = exports.gte = exports.gt = exports.eq = exports.desc = exports.asc = exports.and = void 0;
 var drizzle_orm_1 = require("drizzle-orm");
 Object.defineProperty(exports, "and", { enumerable: true, get: function () { return drizzle_orm_1.and; } });
 Object.defineProperty(exports, "asc", { enumerable: true, get: function () { return drizzle_orm_1.asc; } });
@@ -33,6 +33,11 @@ Object.defineProperty(exports, "TransactionException", { enumerable: true, get: 
 Object.defineProperty(exports, "ValidationFailedException", { enumerable: true, get: function () { return crud_exceptions_1.ValidationFailedException; } });
 var drizzle_crud_module_1 = require("./modules/drizzle-crud.module");
 Object.defineProperty(exports, "DrizzleCrudModule", { enumerable: true, get: function () { return drizzle_crud_module_1.DrizzleCrudModule; } });
+var drizzle_connection_1 = require("./modules/drizzle-connection");
+Object.defineProperty(exports, "DRIZZLE_CONNECTION", { enumerable: true, get: function () { return drizzle_connection_1.DRIZZLE_CONNECTION; } });
+Object.defineProperty(exports, "DRIZZLE_CRUD_CONFIG", { enumerable: true, get: function () { return drizzle_connection_1.DRIZZLE_CRUD_CONFIG; } });
+Object.defineProperty(exports, "DRIZZLE_DB", { enumerable: true, get: function () { return drizzle_connection_1.DRIZZLE_DB; } });
+Object.defineProperty(exports, "DrizzleConnection", { enumerable: true, get: function () { return drizzle_connection_1.DrizzleConnection; } });
 var base_crud_spec_helper_1 = require("./test-utils/base-crud.spec-helper");
 Object.defineProperty(exports, "BaseCrudSpecHelper", { enumerable: true, get: function () { return base_crud_spec_helper_1.BaseCrudSpecHelper; } });
 var test_factory_1 = require("./test-utils/test-factory");

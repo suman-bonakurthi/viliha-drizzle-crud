@@ -3,13 +3,15 @@ import { SqlCrudConfig, SqlOperationOptions } from "../interfaces/sql-crud-confi
 export declare abstract class SqlBaseCrudService<T extends Record<string, any>, CreateDto, UpdateDto, FilterDto> implements ICrudService<T, CreateDto, UpdateDto, FilterDto> {
     protected readonly config: SqlCrudConfig;
     protected readonly defaultConfig: SqlCrudConfig;
+    protected buildSelectFields(select: string[]): Record<string, any> | undefined;
+    protected wasAffected(result: any): boolean;
     protected buildWhereConditionsFromPartial(where: Partial<T>): any[];
     constructor(config: SqlCrudConfig);
     private validateConfiguration;
-    protected abstract validateCreate(data: CreateDto): Promise<void>;
-    protected abstract validateUpdate(id: any, data: UpdateDto): Promise<void>;
-    protected abstract mapCreateDtoToEntity(data: CreateDto): Record<string, any>;
-    protected abstract mapUpdateDtoToEntity(data: UpdateDto): Record<string, any>;
+    protected validateCreate(_data: CreateDto): Promise<void>;
+    protected validateUpdate(_id: any, _data: UpdateDto): Promise<void>;
+    protected mapCreateDtoToEntity(data: CreateDto): Record<string, any>;
+    protected mapUpdateDtoToEntity(data: UpdateDto): Record<string, any>;
     protected beforeCreate(data: CreateDto): Promise<CreateDto>;
     protected afterCreate(entity: T): Promise<void>;
     protected beforeUpdate(id: any, data: UpdateDto): Promise<UpdateDto>;

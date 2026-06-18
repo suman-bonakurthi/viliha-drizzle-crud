@@ -9,71 +9,114 @@ var DrizzleCrudModule_1;
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.DrizzleCrudModule = void 0;
 const common_1 = require("@nestjs/common");
+const drizzle_connection_1 = require("./drizzle-connection");
+const DRIZZLE_RAW_CONFIG = "DRIZZLE_RAW_CONFIG";
+function normalizeConfig(config) {
+    return {
+        dialect: config.dialect,
+        defaults: {
+            softDelete: true,
+            timestamps: true,
+            pagination: { defaultLimit: 20, maxLimit: 100 },
+            ...config.defaults,
+        },
+        sql: {
+            caseSensitive: false,
+            useReturning: config.dialect === "postgresql",
+            jsonSupport: true,
+            enableFullTextSearch: false,
+            ...config.sql,
+        },
+        hooks: {
+            enableGlobalHooks: false,
+            ...config.hooks,
+        },
+    };
+}
+function buildEntityConfig(service, table, entityConfig, db, globalConfig) {
+    const decoratorConfig = Reflect.getMetadata?.("crud:config", service) || {};
+    const perEntity = { ...decoratorConfig, ...(entityConfig || {}) };
+    const gd = globalConfig?.defaults || {};
+    const finalConfig = {
+        dialect: globalConfig?.dialect,
+        db,
+        primaryKey: "id",
+        primaryKeyType: "serial",
+        softDelete: gd.softDelete === false
+            ? { enabled: false, column: "deleted_at" }
+            : { enabled: true, column: "deleted_at" },
+        timestamps: gd.timestamps === false
+            ? undefined
+            : { createdAt: "created_at", updatedAt: "updated_at" },
+    };
+    if (gd.pagination)
+        finalConfig.pagination = gd.pagination;
+    if (globalConfig?.sql)
+        finalConfig.sql = globalConfig.sql;
+    Object.assign(finalConfig, perEntity);
+    finalConfig.table = table ?? perEntity.table;
+    return finalConfig;
+}
+function connectionProviders(rawConfigProvider) {
+    return [
+        rawConfigProvider,
+        {
+            provide: drizzle_connection_1.DRIZZLE_CRUD_CONFIG,
+            inject: [DRIZZLE_RAW_CONFIG],
+            useFactory: (raw) => normalizeConfig(raw),
+        },
+        {
+            provide: drizzle_connection_1.DRIZZLE_CONNECTION,
+            inject: [DRIZZLE_RAW_CONFIG],
+            useFactory: async (raw) => {
+                const connection = new drizzle_connection_1.DrizzleConnection();
+                await connection.init(raw);
+                return connection;
+            },
+        },
+        {
+            provide: drizzle_connection_1.DRIZZLE_DB,
+            inject: [drizzle_connection_1.DRIZZLE_CONNECTION],
+            useFactory: (connection) => connection.db,
+        },
+    ];
+}
+const EXPORTED_TOKENS = [drizzle_connection_1.DRIZZLE_CRUD_CONFIG, drizzle_connection_1.DRIZZLE_DB, drizzle_connection_1.DRIZZLE_CONNECTION];
 let DrizzleCrudModule = DrizzleCrudModule_1 = class DrizzleCrudModule {
     static forRoot(config) {
-        const drizzleCrudConfigProvider = {
-            provide: "DRIZZLE_CRUD_CONFIG",
-            useValue: {
-                dialect: config.dialect,
-                defaults: {
-                    softDelete: true,
-                    timestamps: true,
-                    pagination: { defaultLimit: 20, maxLimit: 100 },
-                    ...config.defaults,
-                },
-                sql: {
-                    caseSensitive: false,
-                    useReturning: config.dialect === "postgresql",
-                    jsonSupport: true,
-                    enableFullTextSearch: false,
-                    ...config.sql,
-                },
-                hooks: {
-                    enableGlobalHooks: false,
-                    ...config.hooks,
-                },
-            },
-        };
         return {
             module: DrizzleCrudModule_1,
-            providers: [drizzleCrudConfigProvider],
-            exports: [drizzleCrudConfigProvider],
+            providers: connectionProviders({
+                provide: DRIZZLE_RAW_CONFIG,
+                useValue: config,
+            }),
+            exports: EXPORTED_TOKENS,
+            global: true,
+        };
+    }
+    static forRootAsync(options) {
+        return {
+            module: DrizzleCrudModule_1,
+            imports: options.imports || [],
+            providers: connectionProviders({
+                provide: DRIZZLE_RAW_CONFIG,
+                useFactory: options.useFactory,
+                inject: options.inject || [],
+            }),
+            exports: EXPORTED_TOKENS,
             global: true,
         };
     }
     static forFeature(entities) {
         const providers = entities.map((entity) => ({
             provide: entity.service,
-            useFactory: (db, globalConfig) => {
-                const config = Reflect.getMetadata("crud:config", entity.service);
-                const finalConfig = {
-                    ...globalConfig,
-                    ...config,
-                    db,
-                    table: config.table,
-                };
-                return new entity.service(finalConfig);
-            },
-            inject: ["DRIZZLE_DB", "DRIZZLE_CRUD_CONFIG"],
+            inject: [drizzle_connection_1.DRIZZLE_DB, drizzle_connection_1.DRIZZLE_CRUD_CONFIG],
+            useFactory: (db, globalConfig) => new entity.service(buildEntityConfig(entity.service, entity.table, entity.config, db, globalConfig)),
         }));
         return {
             module: DrizzleCrudModule_1,
             providers,
             exports: providers,
-        };
-    }
-    static forRootAsync(options) {
-        const drizzleCrudConfigProvider = {
-            provide: "DRIZZLE_CRUD_CONFIG",
-            useFactory: options.useFactory,
-            inject: options.inject || [],
-        };
-        return {
-            module: DrizzleCrudModule_1,
-            imports: options.imports || [],
-            providers: [drizzleCrudConfigProvider],
-            exports: [drizzleCrudConfigProvider],
-            global: true,
         };
     }
 };
