@@ -63,21 +63,31 @@ DrizzleCrudModule.forFeature([{ service: UsersService, table: users }]);
 ## Installation
 
 ```bash
+pnpm add nestjs-drizzle-crud
+# or
 npm install nestjs-drizzle-crud
+# or
+yarn add nestjs-drizzle-crud
 ```
 
 Peer dependencies (install the ones you use):
 
 ```bash
 # always
-npm install @nestjs/common @nestjs/core drizzle-orm reflect-metadata
+pnpm add @nestjs/common @nestjs/core drizzle-orm reflect-metadata
 
 # PostgreSQL (also required if you use `connectionString` with dialect 'postgresql')
-npm install postgres
+pnpm add postgres
 
 # MySQL
-npm install mysql2
+pnpm add mysql2
 ```
+
+> Using npm or yarn? Swap `pnpm add` for `npm install` / `yarn add`.
+
+> **pnpm note:** `postgres`/`mysql2` are optional peer dependencies. pnpm enforces
+> peer deps strictly, so if you build the connection from a `connectionString`
+> make sure the matching driver is installed in your app.
 
 > `postgres` is an **optional** peer dependency. It's only needed when you let the
 > module build the connection from a `connectionString` for the `postgresql` dialect.
@@ -137,13 +147,13 @@ import type { User } from '../db/schema';
 
 export interface CreateUserDto { name: string; email: string }
 export interface UpdateUserDto { name?: string; email?: string }
-export interface UserFilters { name?: string; email?: string }
+export interface UserFilterDto { name?: string; email?: string }
 
 export class UsersService extends SqlBaseCrudService<
   User,
   CreateUserDto,
   UpdateUserDto,
-  UserFilters
+  UserFilterDto
 > {}
 ```
 
@@ -289,7 +299,7 @@ Add custom behaviour by overriding hooks (see [Lifecycle hooks](#lifecycle-hooks
 or add your own methods:
 
 ```typescript
-export class UsersService extends SqlBaseCrudService<User, CreateUserDto, UpdateUserDto, UserFilters> {
+export class UsersService extends SqlBaseCrudService<User, CreateUserDto, UpdateUserDto, UserFilterDto> {
   findByEmail(email: string) {
     return this.findOne({ email } as Partial<User>);
   }
@@ -608,7 +618,7 @@ Concise, accurate facts for code generation. Prefer these over guessing.
 
 **A service is an empty subclass — do NOT inject the db or pass `dialect`/`db`:**
 ```typescript
-export class XService extends SqlBaseCrudService<X, CreateXDto, UpdateXDto, XFilters> {}
+export class XService extends SqlBaseCrudService<X, CreateXDto, UpdateXDto, XFilterDto> {}
 ```
 
 **Rules / gotchas:**
