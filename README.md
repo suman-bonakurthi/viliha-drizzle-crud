@@ -34,6 +34,7 @@ DrizzleCrudModule.forFeature([{ service: UsersService, table: users }]);
 - [Relations](#relations)
 - [Primary keys (serial / uuid)](#primary-keys-serial--uuid)
 - [Soft delete](#soft-delete)
+- [Timestamps](#timestamps)
 - [Bulk operations](#bulk-operations)
 - [Transactions](#transactions)
 - [Full-text search (PostgreSQL)](#full-text-search-postgresql)
@@ -517,6 +518,50 @@ Enable per-project via `defaults.softDelete` or per-entity via `forFeature` conf
 - `softDelete(id)` sets the column to the current timestamp.
 - `restore(id)` sets it back to `null`.
 - `find`/`findOne`/`findAll`/`count` automatically exclude soft-deleted rows.
+
+---
+
+## Timestamps
+
+There are two ways to manage `created_at` / `updated_at`.
+
+### Package-managed (convenient)
+
+Enable `defaults.timestamps` (or per-entity `timestamps`). On `create()` the
+service stamps both columns; on `update()`/`softDelete()` it stamps `updated_at`:
+
+```typescript
+DrizzleCrudModule.forRoot({
+  dialect: 'postgresql',
+  connectionString: process.env.DATABASE_URL,
+  schema,
+  defaults: { timestamps: true }, // uses columns created_at / updated_at
+});
+```
+
+> Caveat: this uses the **application** clock and only applies to writes that go
+> **through the package** — raw SQL, migrations or other code paths won't set
+> the values.
+
+### Schema/DB-managed (recommended)
+
+For authoritative timestamps (database time, every write path), define them in
+your Drizzle schema and **leave the package's `timestamps` disabled**:
+
+```typescript
+import { timestamp } from 'drizzle-orm/pg-core';
+
+created_at: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+updated_at: timestamp('updated_at', { withTimezone: true })
+  .defaultNow()
+  .notNull()
+  .$onUpdate(() => new Date()),
+```
+
+`defaultNow()` lets the database set `created_at` on insert; `$onUpdate()` makes
+Drizzle bump `updated_at` on every update (including the package's own
+`update()`). For `updated_at` that's authoritative even for raw SQL, add a
+Postgres trigger / MySQL `ON UPDATE CURRENT_TIMESTAMP`.
 
 ---
 
