@@ -137,17 +137,17 @@ export abstract class SqlBaseCrudService<
 	protected async beforeCreate(data: CreateDto): Promise<CreateDto> {
 		return data;
 	}
-	protected async afterCreate(entity: T): Promise<void> {}
-	protected async beforeUpdate(id: any, data: UpdateDto): Promise<UpdateDto> {
+	protected async afterCreate(_entity: T): Promise<void> {}
+	protected async beforeUpdate(_id: any, data: UpdateDto): Promise<UpdateDto> {
 		return data;
 	}
-	protected async afterUpdate(entity: T): Promise<void> {}
-	protected async beforeDelete(id: any): Promise<void> {}
-	protected async afterDelete(id: any): Promise<void> {}
-	protected async beforeSoftDelete(id: any): Promise<void> {}
-	protected async afterSoftDelete(id: any): Promise<void> {}
-	protected async beforeRestore(id: any): Promise<void> {}
-	protected async afterRestore(entity: T): Promise<void> {}
+	protected async afterUpdate(_entity: T): Promise<void> {}
+	protected async beforeDelete(_id: any): Promise<void> {}
+	protected async afterDelete(_id: any): Promise<void> {}
+	protected async beforeSoftDelete(_id: any): Promise<void> {}
+	protected async afterSoftDelete(_id: any): Promise<void> {}
+	protected async beforeRestore(_id: any): Promise<void> {}
+	protected async afterRestore(_entity: T): Promise<void> {}
 
 	// ---- Relation helpers (many-to-one / belongs-to) ----
 

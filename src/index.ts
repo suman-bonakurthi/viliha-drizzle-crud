@@ -37,14 +37,9 @@ export type {
 	SqlOperationOptions,
 } from "./core/interfaces/sql-crud-config.interface";
 // Types
-export type {
-	PrimaryKeyType,
-	SqlDialect,
-	SqlFilterCondition,
-} from "./core/types/sql.types";
+export type { PrimaryKeyType, SqlDialect } from "./core/types/sql.types";
 // Decorators
 export { CrudService } from "./decorators/crud-service.decorator";
-export { EntityConfig } from "./decorators/entity-config.decorator";
 // Exceptions
 export {
 	BulkOperationException,

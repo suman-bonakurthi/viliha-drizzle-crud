@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.TestCrudFactory = exports.BaseCrudSpecHelper = exports.DrizzleConnection = exports.DRIZZLE_DB = exports.DRIZZLE_CRUD_CONFIG = exports.DRIZZLE_CONNECTION = exports.DrizzleCrudModule = exports.ValidationFailedException = exports.TransactionException = exports.EntityNotFoundException = exports.DuplicateEntityException = exports.DatabaseConnectionException = exports.BulkOperationException = exports.EntityConfig = exports.CrudService = exports.SqlBaseCrudService = exports.sql = exports.or = exports.ne = exports.lte = exports.lt = exports.like = exports.isNull = exports.isNotNull = exports.inArray = exports.ilike = exports.gte = exports.gt = exports.eq = exports.desc = exports.asc = exports.and = void 0;
+exports.TestCrudFactory = exports.BaseCrudSpecHelper = exports.DrizzleConnection = exports.DRIZZLE_DB = exports.DRIZZLE_CRUD_CONFIG = exports.DRIZZLE_CONNECTION = exports.DrizzleCrudModule = exports.ValidationFailedException = exports.TransactionException = exports.EntityNotFoundException = exports.DuplicateEntityException = exports.DatabaseConnectionException = exports.BulkOperationException = exports.CrudService = exports.SqlBaseCrudService = exports.sql = exports.or = exports.ne = exports.lte = exports.lt = exports.like = exports.isNull = exports.isNotNull = exports.inArray = exports.ilike = exports.gte = exports.gt = exports.eq = exports.desc = exports.asc = exports.and = void 0;
 var drizzle_orm_1 = require("drizzle-orm");
 Object.defineProperty(exports, "and", { enumerable: true, get: function () { return drizzle_orm_1.and; } });
 Object.defineProperty(exports, "asc", { enumerable: true, get: function () { return drizzle_orm_1.asc; } });
@@ -22,8 +22,6 @@ var sql_base_crud_service_1 = require("./core/abstract/sql-base-crud.service");
 Object.defineProperty(exports, "SqlBaseCrudService", { enumerable: true, get: function () { return sql_base_crud_service_1.SqlBaseCrudService; } });
 var crud_service_decorator_1 = require("./decorators/crud-service.decorator");
 Object.defineProperty(exports, "CrudService", { enumerable: true, get: function () { return crud_service_decorator_1.CrudService; } });
-var entity_config_decorator_1 = require("./decorators/entity-config.decorator");
-Object.defineProperty(exports, "EntityConfig", { enumerable: true, get: function () { return entity_config_decorator_1.EntityConfig; } });
 var crud_exceptions_1 = require("./exceptions/crud.exceptions");
 Object.defineProperty(exports, "BulkOperationException", { enumerable: true, get: function () { return crud_exceptions_1.BulkOperationException; } });
 Object.defineProperty(exports, "DatabaseConnectionException", { enumerable: true, get: function () { return crud_exceptions_1.DatabaseConnectionException; } });
