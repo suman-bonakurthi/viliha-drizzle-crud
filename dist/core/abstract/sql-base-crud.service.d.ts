@@ -1,3 +1,4 @@
+import { DuplicateEntityException } from "../../exceptions/crud.exceptions";
 import { ICrudService, PaginationOptions } from "../interfaces/crud-service.interface";
 import { SqlCrudConfig, SqlOperationOptions } from "../interfaces/sql-crud-config.interface";
 import { SortOrder } from "../types/sql.types";
@@ -29,6 +30,14 @@ export declare abstract class SqlBaseCrudService<T extends Record<string, any>, 
     protected applyJoins(query: any, relationNames: string[]): any;
     protected normalizeRelations(rows: any[], eager: string[]): any[];
     protected buildOrderBy(sortBy?: string, sortOrder?: SortOrder): any[];
+    protected resolvePagination(page?: number, limit?: number): {
+        page: number;
+        limit: number;
+        offset: number;
+    };
+    protected isUniqueViolation(error: any): boolean;
+    protected toDuplicateException(error: any): DuplicateEntityException;
+    protected applyLock(query: any, options?: SqlOperationOptions): any;
     find(id: any, options?: SqlOperationOptions): Promise<T | null>;
     findOne(where: Partial<T>, options?: SqlOperationOptions): Promise<T | null>;
     findAll(filters?: FilterDto, pagination?: PaginationOptions, options?: SqlOperationOptions): Promise<{

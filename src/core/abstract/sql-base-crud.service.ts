@@ -18,8 +18,10 @@ import {
 	ne,
 	sql,
 } from "drizzle-orm";
+import { BadRequestException } from "@nestjs/common";
 import {
 	BulkOperationException,
+	DuplicateEntityException,
 	EntityNotFoundException,
 } from "../../exceptions/crud.exceptions";
 import {
@@ -245,20 +247,84 @@ export abstract class SqlBaseCrudService<
 
 	// Build the ORDER BY expressions for findAll. An explicit caller `sortBy`
 	// wins and fully replaces the configured default; otherwise the entity's
-	// `defaultSort` (possibly multi-column) is applied in order. Unknown columns
-	// are skipped, so a misconfigured sort never throws.
+	// `defaultSort` (possibly multi-column) is applied in order.
+	// A caller-supplied `sortBy` that isn't a real column is a client error and
+	// fails fast (400) rather than silently returning unsorted data. An unknown
+	// column inside the configured `defaultSort` is a developer/config mistake,
+	// so it's warned and skipped (not surfaced to the client).
 	protected buildOrderBy(sortBy?: string, sortOrder: SortOrder = "desc"): any[] {
-		if (sortBy && this.config.table[sortBy]) {
+		if (sortBy) {
 			const col = this.config.table[sortBy];
+			if (!col) {
+				throw new BadRequestException(`Unknown sort column: ${sortBy}`);
+			}
 			return [sortOrder === "desc" ? desc(col) : asc(col)];
 		}
 		const out: any[] = [];
 		for (const spec of this.config.defaultSort ?? []) {
 			const col = this.config.table[spec.column];
-			if (!col) continue;
+			if (!col) {
+				console.warn(
+					`[nestjs-drizzle-crud] defaultSort references unknown column "${spec.column}"; skipping.`,
+				);
+				continue;
+			}
 			out.push(spec.order === "desc" ? desc(col) : asc(col));
 		}
 		return out;
+	}
+
+	// Clamp pagination input to safe bounds: page >= 1 and 1 <= limit <= maxLimit.
+	// Shared by findAll and fullTextSearch so bad input (page<1, limit<=0,
+	// limit>maxLimit) can never produce a negative OFFSET or a LIMIT 0 / LIMIT -n.
+	protected resolvePagination(
+		page?: number,
+		limit?: number,
+	): { page: number; limit: number; offset: number } {
+		const maxLimit = this.config.pagination!.maxLimit!;
+		const defaultLimit = this.config.pagination!.defaultLimit!;
+		const rawPage =
+			page == null || isNaN(Number(page)) ? 1 : Math.floor(Number(page));
+		const rawLimit =
+			limit == null || isNaN(Number(limit))
+				? defaultLimit
+				: Math.floor(Number(limit));
+		const safePage = Math.max(1, rawPage);
+		const safeLimit = Math.min(Math.max(1, rawLimit), maxLimit);
+		return {
+			page: safePage,
+			limit: safeLimit,
+			offset: (safePage - 1) * safeLimit,
+		};
+	}
+
+	// Detect a Postgres unique-constraint violation across driver shapes:
+	// postgres-js sets `.code` on the error; Drizzle wraps it under `.cause`.
+	protected isUniqueViolation(error: any): boolean {
+		const code = error?.code ?? error?.cause?.code;
+		return code === "23505"; // Postgres unique_violation
+	}
+
+	// Turn a Postgres unique violation into a typed 409 exception, parsing the
+	// offending field/value out of the driver `detail` when available
+	// (e.g. "Key (code)=(EU) already exists.").
+	protected toDuplicateException(error: any): DuplicateEntityException {
+		const detail: string = error?.detail ?? error?.cause?.detail ?? "";
+		const m = detail.match(/Key \((?<field>.+?)\)=\((?<value>.+?)\)/);
+		return new DuplicateEntityException(
+			this.getEntityName(),
+			m?.groups?.field ?? "unique field",
+			m?.groups?.value ?? "",
+		);
+	}
+
+	// Apply a row-level lock to a SELECT builder (Postgres only; no-op elsewhere).
+	protected applyLock(query: any, options?: SqlOperationOptions): any {
+		if (this.config.dialect !== "postgresql") return query;
+		if (options?.forNoKeyUpdate) return query.for("no key update");
+		if (options?.lock && options.lock !== "none")
+			return query.for(options.lock);
+		return query;
 	}
 
 	// Single Operations
@@ -276,6 +342,7 @@ export abstract class SqlBaseCrudService<
 		query = this.applyJoins(query, eager)
 			.where(and(...conditions))
 			.limit(1);
+		query = this.applyLock(query, options);
 
 		const result = await query;
 		return this.normalizeRelations(result, eager)[0] || null;
@@ -298,6 +365,7 @@ export abstract class SqlBaseCrudService<
 		query = this.applyJoins(query, eager)
 			.where(and(...conditions))
 			.limit(1);
+		query = this.applyLock(query, options);
 
 		const result = await query;
 		return this.normalizeRelations(result, eager)[0] || null;
@@ -309,15 +377,12 @@ export abstract class SqlBaseCrudService<
 		options?: SqlOperationOptions,
 	): Promise<{ data: T[]; total: number; page: number; limit: number }> {
 		const { transaction, relations = [], select = [] } = options || {};
+		const { sortBy, sortOrder = "desc" } = pagination || {};
 		const {
-			page = 1,
-			limit = this.config.pagination!.defaultLimit!,
-			sortBy,
-			sortOrder = "desc",
-		} = pagination || {};
-
-		const safeLimit = Math.min(limit, this.config.pagination!.maxLimit!);
-		const offset = (page - 1) * safeLimit;
+			page,
+			limit: safeLimit,
+			offset,
+		} = this.resolvePagination(pagination?.page, pagination?.limit);
 		const db = transaction || this.config.db;
 		const eager = this.eagerRelations(relations);
 
@@ -347,6 +412,7 @@ export abstract class SqlBaseCrudService<
 			dataQuery = dataQuery.orderBy(...orderBy);
 		}
 		dataQuery = dataQuery.limit(safeLimit).offset(offset);
+		dataQuery = this.applyLock(dataQuery, options);
 
 		let countQuery = db
 			.select({ count: sql<number>`count(*)` })
@@ -385,23 +451,29 @@ export abstract class SqlBaseCrudService<
 		const db = transaction || this.config.db;
 		let insertQuery = db.insert(this.config.table).values(entityData);
 
-		if (this.config.sql?.useReturning) {
-			insertQuery = insertQuery.returning();
-			const result = await insertQuery;
-			const createdEntity = result[0];
-			if (!hooks.skipAfter) await this.afterCreate(createdEntity);
-			return createdEntity;
-		} else {
-			const result = await insertQuery;
-			// Without RETURNING (e.g. MySQL): prefer a client-supplied primary key
-			// (required for uuid / non-auto-increment keys), otherwise fall back
-			// to the driver's auto-increment insertId.
-			const lastInsertId =
-				entityData[this.config.primaryKey] ?? result?.[0]?.insertId;
-			const createdEntity = await this.find(lastInsertId, options);
-			if (!createdEntity) throw new Error("Failed to create entity");
-			if (!hooks.skipAfter) await this.afterCreate(createdEntity);
-			return createdEntity;
+		try {
+			if (this.config.sql?.useReturning) {
+				insertQuery = insertQuery.returning();
+				const result = await insertQuery;
+				const createdEntity = result[0];
+				if (!hooks.skipAfter) await this.afterCreate(createdEntity);
+				return createdEntity;
+			} else {
+				const result = await insertQuery;
+				// Without RETURNING (e.g. MySQL): prefer a client-supplied primary key
+				// (required for uuid / non-auto-increment keys), otherwise fall back
+				// to the driver's auto-increment insertId.
+				const lastInsertId =
+					entityData[this.config.primaryKey] ?? result?.[0]?.insertId;
+				const createdEntity = await this.find(lastInsertId, options);
+				if (!createdEntity) throw new Error("Failed to create entity");
+				if (!hooks.skipAfter) await this.afterCreate(createdEntity);
+				return createdEntity;
+			}
+		} catch (error) {
+			// Surface a unique violation as 409 Conflict instead of a raw 500.
+			if (this.isUniqueViolation(error)) throw this.toDuplicateException(error);
+			throw error;
 		}
 	}
 
@@ -430,18 +502,23 @@ export abstract class SqlBaseCrudService<
 			.set(entityData)
 			.where(eq(this.config.table[this.config.primaryKey], id));
 
-		if (this.config.sql?.useReturning) {
-			updateQuery = updateQuery.returning();
-			const result = await updateQuery;
-			const updatedEntity = result[0];
-			if (!hooks.skipAfter) await this.afterUpdate(updatedEntity);
-			return updatedEntity;
-		} else {
-			await updateQuery;
-			const updatedEntity = await this.find(id, options);
-			if (!updatedEntity) throw new Error("Failed to update entity");
-			if (!hooks.skipAfter) await this.afterUpdate(updatedEntity);
-			return updatedEntity;
+		try {
+			if (this.config.sql?.useReturning) {
+				updateQuery = updateQuery.returning();
+				const result = await updateQuery;
+				const updatedEntity = result[0];
+				if (!hooks.skipAfter) await this.afterUpdate(updatedEntity);
+				return updatedEntity;
+			} else {
+				await updateQuery;
+				const updatedEntity = await this.find(id, options);
+				if (!updatedEntity) throw new Error("Failed to update entity");
+				if (!hooks.skipAfter) await this.afterUpdate(updatedEntity);
+				return updatedEntity;
+			}
+		} catch (error) {
+			if (this.isUniqueViolation(error)) throw this.toDuplicateException(error);
+			throw error;
 		}
 	}
 
@@ -842,17 +919,26 @@ export abstract class SqlBaseCrudService<
 		);
 		const tsQuery = sql`plainto_tsquery('english', ${searchTerm})`;
 
+		// Like find/findAll/count, exclude soft-deleted rows from search results.
+		const matchExpr = sql`${tsVector} @@ ${tsQuery}`;
+		const whereExpr = this.config.softDelete?.enabled
+			? and(
+					matchExpr,
+					isNull(this.config.table[this.config.softDelete.column]),
+				)
+			: matchExpr;
+
 		let query = db
 			.select()
 			.from(this.config.table)
-			.where(sql`${tsVector} @@ ${tsQuery}`)
+			.where(whereExpr)
 			.orderBy(sql`ts_rank(${tsVector}, ${tsQuery}) DESC`);
 
 		if (pagination) {
-			const { page = 1, limit = this.config.pagination!.defaultLimit! } =
-				pagination;
-			const safeLimit = Math.min(limit, this.config.pagination!.maxLimit!);
-			const offset = (page - 1) * safeLimit;
+			const { limit: safeLimit, offset } = this.resolvePagination(
+				pagination.page,
+				pagination.limit,
+			);
 			query = query.limit(safeLimit).offset(offset);
 		}
 
@@ -860,7 +946,7 @@ export abstract class SqlBaseCrudService<
 		const countQuery = db
 			.select({ count: sql<number>`count(*)` })
 			.from(this.config.table)
-			.where(sql`${tsVector} @@ ${tsQuery}`);
+			.where(whereExpr);
 		const totalResult = await countQuery;
 		const total = parseInt(totalResult[0]?.count?.toString() || "0");
 

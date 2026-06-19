@@ -205,9 +205,11 @@ describe("SqlBaseCrudService", () => {
 			expect(orderBy()).toHaveLength(1);
 		});
 
-		it("falls back to defaultSort when caller sortBy is an unknown column", () => {
+		it("throws BadRequest when caller sortBy is an unknown column", () => {
 			service["config"].defaultSort = [{ column: "name" }];
-			expect(orderBy("nope", "asc")).toHaveLength(1);
+			// Fail-fast: a client-supplied sort column that doesn't exist is a 400,
+			// not a silent fallback to the default order.
+			expect(() => orderBy("nope", "asc")).toThrow();
 		});
 	});
 
