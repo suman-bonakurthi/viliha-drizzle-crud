@@ -37,7 +37,12 @@ export type {
 	SqlOperationOptions,
 } from "./core/interfaces/sql-crud-config.interface";
 // Types
-export type { PrimaryKeyType, SqlDialect } from "./core/types/sql.types";
+export type {
+	PrimaryKeyType,
+	SortColumn,
+	SortOrder,
+	SqlDialect,
+} from "./core/types/sql.types";
 // Decorators
 export { CrudService } from "./decorators/crud-service.decorator";
 // Exceptions

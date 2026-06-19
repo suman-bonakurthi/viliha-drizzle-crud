@@ -90,17 +90,17 @@ class SqlBaseCrudService {
     async beforeCreate(data) {
         return data;
     }
-    async afterCreate(entity) { }
-    async beforeUpdate(id, data) {
+    async afterCreate(_entity) { }
+    async beforeUpdate(_id, data) {
         return data;
     }
-    async afterUpdate(entity) { }
-    async beforeDelete(id) { }
-    async afterDelete(id) { }
-    async beforeSoftDelete(id) { }
-    async afterSoftDelete(id) { }
-    async beforeRestore(id) { }
-    async afterRestore(entity) { }
+    async afterUpdate(_entity) { }
+    async beforeDelete(_id) { }
+    async afterDelete(_id) { }
+    async beforeSoftDelete(_id) { }
+    async afterSoftDelete(_id) { }
+    async beforeRestore(_id) { }
+    async afterRestore(_entity) { }
     eagerRelations(relations) {
         const configured = this.config.relations || {};
         return (relations || []).filter((name) => !!configured[name]);
@@ -166,6 +166,20 @@ class SqlBaseCrudService {
             return out;
         });
     }
+    buildOrderBy(sortBy, sortOrder = "desc") {
+        if (sortBy && this.config.table[sortBy]) {
+            const col = this.config.table[sortBy];
+            return [sortOrder === "desc" ? (0, drizzle_orm_1.desc)(col) : (0, drizzle_orm_1.asc)(col)];
+        }
+        const out = [];
+        for (const spec of this.config.defaultSort ?? []) {
+            const col = this.config.table[spec.column];
+            if (!col)
+                continue;
+            out.push(spec.order === "desc" ? (0, drizzle_orm_1.desc)(col) : (0, drizzle_orm_1.asc)(col));
+        }
+        return out;
+    }
     async find(id, options) {
         const { transaction, relations = [], select = [] } = options || {};
         const db = transaction || this.config.db;
@@ -213,10 +227,9 @@ class SqlBaseCrudService {
         if (conditions.length > 0) {
             dataQuery = dataQuery.where((0, drizzle_orm_1.and)(...conditions));
         }
-        if (sortBy && this.config.table[sortBy]) {
-            dataQuery = dataQuery.orderBy(sortOrder === "desc"
-                ? (0, drizzle_orm_1.desc)(this.config.table[sortBy])
-                : (0, drizzle_orm_1.asc)(this.config.table[sortBy]));
+        const orderBy = this.buildOrderBy(sortBy, sortOrder);
+        if (orderBy.length > 0) {
+            dataQuery = dataQuery.orderBy(...orderBy);
         }
         dataQuery = dataQuery.limit(safeLimit).offset(offset);
         let countQuery = db

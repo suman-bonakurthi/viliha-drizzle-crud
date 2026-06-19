@@ -230,6 +230,7 @@ export class UsersController {
 | `defaults.softDelete` | `boolean` | Enable soft delete for all entities (default `true`). |
 | `defaults.timestamps` | `boolean` | Auto-manage `created_at`/`updated_at` for all entities (default `true`). |
 | `defaults.pagination` | `{ defaultLimit, maxLimit }` | Pagination defaults (default `{ 20, 100 }`). |
+| `defaults.sortOrder` | `'asc' \| 'desc'` | Opt-in default sort: entities **without** an explicit `defaultSort` fall back to ordering by their `created_at` column in this direction. Omit to leave `findAll` unsorted by default. |
 | `sql` | `{ caseSensitive, useReturning, jsonSupport, enableFullTextSearch }` | Dialect tuning. `useReturning` defaults to `true` for PostgreSQL, `false` for MySQL. |
 
 > **Provide exactly one of `connectionString` or `db`.** If your tables have no
@@ -277,6 +278,11 @@ DrizzleCrudModule.forFeature([
       primaryKey: 'uuid',
       primaryKeyType: 'uuid',
       softDelete: { enabled: true, column: 'deleted_at' },
+      // Default ORDER BY for findAll() when the caller passes no sortBy.
+      defaultSort: [
+        { column: 'position', order: 'asc' },
+        { column: 'created_at', order: 'desc' }, // tiebreaker
+      ],
     },
   },
 ]);
@@ -412,6 +418,23 @@ await service.findAll(
 ```
 
 `limit` is capped at `pagination.maxLimit`. `sortOrder` defaults to `'desc'`.
+
+### Default sort
+
+When the caller passes no `sortBy`, `findAll` falls back to the entity's
+`defaultSort` — an ordered list of columns applied as the `ORDER BY` (primary
+sort first, then tiebreakers). An explicit `sortBy` **replaces** the default
+entirely. Per-column `order` defaults to `'asc'`; unknown columns are skipped.
+
+```typescript
+// config.defaultSort: [{ column: 'position', order: 'asc' }, { column: 'created_at', order: 'desc' }]
+await service.findAll();                       // ORDER BY position ASC, created_at DESC
+await service.findAll({}, { sortBy: 'name' }); // ORDER BY name DESC  (default ignored)
+```
+
+Set it per entity in [`forFeature`](#drizzlecrudmoduleforfeatureentities) config (or via
+`@CrudService`). Alternatively, set [`defaults.sortOrder`](#drizzlecrudmoduleforrootconfig)
+in `forRoot` to apply a `created_at` fallback to every entity that doesn't define its own.
 
 ---
 

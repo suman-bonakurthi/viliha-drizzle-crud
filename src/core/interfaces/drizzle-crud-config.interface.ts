@@ -1,4 +1,4 @@
-import { SqlDialect } from "../types/sql.types";
+import { SortOrder, SqlDialect } from "../types/sql.types";
 
 export interface DrizzleCrudConfig {
 	// Database configuration
@@ -22,6 +22,10 @@ export interface DrizzleCrudConfig {
 			defaultLimit: number;
 			maxLimit: number;
 		};
+		// Opt-in fallback: entities WITHOUT an explicit defaultSort sort by their
+		// timestamps.createdAt column in this direction. Omit to leave findAll
+		// unsorted by default (backward compatible).
+		sortOrder?: SortOrder;
 	};
 
 	// SQL-specific

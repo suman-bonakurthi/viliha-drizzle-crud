@@ -73,6 +73,18 @@ function buildEntityConfig(
 	Object.assign(finalConfig, perEntity);
 	finalConfig.table = table ?? perEntity.table;
 
+	// Opt-in global fallback: when no per-entity defaultSort was provided and a
+	// global sortOrder is set, default to sorting by the createdAt timestamp.
+	if (
+		!finalConfig.defaultSort &&
+		gd.sortOrder &&
+		finalConfig.timestamps?.createdAt
+	) {
+		finalConfig.defaultSort = [
+			{ column: finalConfig.timestamps.createdAt, order: gd.sortOrder },
+		];
+	}
+
 	return finalConfig as SqlCrudConfig;
 }
 

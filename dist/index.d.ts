@@ -3,7 +3,7 @@ export { SqlBaseCrudService } from "./core/abstract/sql-base-crud.service";
 export type { ICrudService } from "./core/interfaces/crud-service.interface";
 export type { CrudFeature, DrizzleCrudConfig, } from "./core/interfaces/drizzle-crud-config.interface";
 export type { RelationConfig, RelationsConfig, SqlCrudConfig, SqlOperationOptions, } from "./core/interfaces/sql-crud-config.interface";
-export type { PrimaryKeyType, SqlDialect } from "./core/types/sql.types";
+export type { PrimaryKeyType, SortColumn, SortOrder, SqlDialect, } from "./core/types/sql.types";
 export { CrudService } from "./decorators/crud-service.decorator";
 export { BulkOperationException, DatabaseConnectionException, DuplicateEntityException, EntityNotFoundException, TransactionException, ValidationFailedException, } from "./exceptions/crud.exceptions";
 export { DrizzleCrudModule } from "./modules/drizzle-crud.module";

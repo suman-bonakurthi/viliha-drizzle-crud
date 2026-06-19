@@ -30,6 +30,7 @@ import {
 	SqlCrudConfig,
 	SqlOperationOptions,
 } from "../interfaces/sql-crud-config.interface";
+import { SortOrder } from "../types/sql.types";
 
 export abstract class SqlBaseCrudService<
 	T extends Record<string, any>,
@@ -242,6 +243,24 @@ export abstract class SqlBaseCrudService<
 		});
 	}
 
+	// Build the ORDER BY expressions for findAll. An explicit caller `sortBy`
+	// wins and fully replaces the configured default; otherwise the entity's
+	// `defaultSort` (possibly multi-column) is applied in order. Unknown columns
+	// are skipped, so a misconfigured sort never throws.
+	protected buildOrderBy(sortBy?: string, sortOrder: SortOrder = "desc"): any[] {
+		if (sortBy && this.config.table[sortBy]) {
+			const col = this.config.table[sortBy];
+			return [sortOrder === "desc" ? desc(col) : asc(col)];
+		}
+		const out: any[] = [];
+		for (const spec of this.config.defaultSort ?? []) {
+			const col = this.config.table[spec.column];
+			if (!col) continue;
+			out.push(spec.order === "desc" ? desc(col) : asc(col));
+		}
+		return out;
+	}
+
 	// Single Operations
 	async find(id: any, options?: SqlOperationOptions): Promise<T | null> {
 		const { transaction, relations = [], select = [] } = options || {};
@@ -323,12 +342,9 @@ export abstract class SqlBaseCrudService<
 		if (conditions.length > 0) {
 			dataQuery = dataQuery.where(and(...conditions));
 		}
-		if (sortBy && this.config.table[sortBy]) {
-			dataQuery = dataQuery.orderBy(
-				sortOrder === "desc"
-					? desc(this.config.table[sortBy])
-					: asc(this.config.table[sortBy]),
-			);
+		const orderBy = this.buildOrderBy(sortBy, sortOrder);
+		if (orderBy.length > 0) {
+			dataQuery = dataQuery.orderBy(...orderBy);
 		}
 		dataQuery = dataQuery.limit(safeLimit).offset(offset);
 

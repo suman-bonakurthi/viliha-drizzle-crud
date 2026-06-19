@@ -1,4 +1,4 @@
-import { PrimaryKeyType, SqlDialect } from "../types/sql.types";
+import { PrimaryKeyType, SortColumn, SqlDialect } from "../types/sql.types";
 export interface RelationConfig {
     table: any;
     localKey: string;
@@ -23,6 +23,7 @@ export interface SqlCrudConfig {
         defaultLimit: number;
         maxLimit: number;
     };
+    defaultSort?: SortColumn[];
     sql?: {
         caseSensitive: boolean;
         useReturning: boolean;
