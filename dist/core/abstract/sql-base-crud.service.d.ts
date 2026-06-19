@@ -70,5 +70,7 @@ export declare abstract class SqlBaseCrudService<T extends Record<string, any>, 
     fullTextSearch(searchTerm: string, searchColumns: string[], pagination?: PaginationOptions, options?: SqlOperationOptions): Promise<{
         data: T[];
         total: number;
+        page: number;
+        limit: number;
     }>;
 }

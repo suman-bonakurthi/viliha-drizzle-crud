@@ -186,3 +186,69 @@ describe("Bug #7: lock options applied on Postgres reads", () => {
 		expect(q.for).toHaveBeenCalledWith("update");
 	});
 });
+
+// ---- 3.0.2 residual edges (found by the HTTP probe; see lab test/fix-plan.md) ----
+
+describe("F1: fullTextSearch returns the same envelope as findAll", () => {
+	it("includes page and limit (resolved), not just { data, total }", async () => {
+		const q = chain([]); // both data + count queries resolve to []
+		const db: any = { select: jest.fn(() => q) };
+		const svc = TestCrudFactory.createTestService(
+			Svc,
+			db,
+			TestCrudFactory.createMockTable(),
+		);
+		const res = await (svc as any).fullTextSearch("term", ["name"], {
+			page: 2,
+			limit: 5,
+		});
+		expect(res).toMatchObject({ page: 2, limit: 5 });
+		expect(res).toHaveProperty("total");
+		expect(res).toHaveProperty("data");
+	});
+});
+
+describe("F2: invalid sortOrder fails fast (mirrors unknown-column)", () => {
+	let svc: any;
+	beforeEach(() => {
+		svc = TestCrudFactory.createTestService(
+			Svc,
+			TestCrudFactory.createMockDb(),
+			TestCrudFactory.createMockTable(),
+		);
+	});
+
+	it("throws BadRequest on a sortOrder that isn't asc/desc", () => {
+		expect(() => svc.buildOrderBy("name", "sideways")).toThrow(
+			BadRequestException,
+		);
+	});
+
+	it("still accepts asc and desc", () => {
+		expect(svc.buildOrderBy("name", "asc")).toHaveLength(1);
+		expect(svc.buildOrderBy("name", "desc")).toHaveLength(1);
+	});
+});
+
+describe("F3: non-finite numeric filter operand -> 400 (not a raw 500)", () => {
+	let svc: any;
+	beforeEach(() => {
+		svc = TestCrudFactory.createTestService(
+			Svc,
+			TestCrudFactory.createMockDb(),
+			TestCrudFactory.createMockTable(),
+		);
+	});
+
+	it("rejects { gt: NaN }", () => {
+		expect(() => svc.applyComplexFilter([], "views", { gt: NaN })).toThrow(
+			BadRequestException,
+		);
+	});
+
+	it("rejects { lte: Infinity }", () => {
+		expect(() =>
+			svc.applyComplexFilter([], "views", { lte: Infinity }),
+		).toThrow(BadRequestException);
+	});
+});

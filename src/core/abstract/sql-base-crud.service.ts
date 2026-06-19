@@ -258,6 +258,13 @@ export abstract class SqlBaseCrudService<
 			if (!col) {
 				throw new BadRequestException(`Unknown sort column: ${sortBy}`);
 			}
+			// Fail fast on a bad sortOrder too (mirrors the unknown-column check);
+			// otherwise anything other than "desc" silently sorted ascending.
+			if (sortOrder !== "asc" && sortOrder !== "desc") {
+				throw new BadRequestException(
+					`Invalid sortOrder: ${sortOrder} (expected 'asc' or 'desc')`,
+				);
+			}
 			return [sortOrder === "desc" ? desc(col) : asc(col)];
 		}
 		const out: any[] = [];
@@ -839,6 +846,19 @@ export abstract class SqlBaseCrudService<
 		filterObj: any,
 	): void {
 		for (const [op, value] of Object.entries(filterObj)) {
+			// Guard the ordered-comparison ops against a non-finite numeric operand
+			// (e.g. { gt: NaN } from an unguarded Number('abc') in a controller).
+			// Letting NaN/Infinity reach SQL throws a raw DB error -> opaque 500;
+			// reject it as a 400 instead. Non-number operands (dates/strings) pass.
+			if (
+				(op === "gt" || op === "gte" || op === "lt" || op === "lte") &&
+				typeof value === "number" &&
+				!Number.isFinite(value)
+			) {
+				throw new BadRequestException(
+					`Invalid numeric filter operand for "${op}": ${value}`,
+				);
+			}
 			switch (op) {
 				case "gt":
 					conditions.push(gt(column, value));
@@ -900,7 +920,7 @@ export abstract class SqlBaseCrudService<
 		searchColumns: string[],
 		pagination?: PaginationOptions,
 		options?: SqlOperationOptions,
-	): Promise<{ data: T[]; total: number }> {
+	): Promise<{ data: T[]; total: number; page: number; limit: number }> {
 		if (this.config.dialect !== "postgresql") {
 			throw new Error("Full-text search only supported in PostgreSQL");
 		}
@@ -934,12 +954,15 @@ export abstract class SqlBaseCrudService<
 			.where(whereExpr)
 			.orderBy(sql`ts_rank(${tsVector}, ${tsQuery}) DESC`);
 
+		// Resolve page/limit even when pagination is omitted so the envelope is
+		// consistent with findAll's { data, total, page, limit }. The query is
+		// only constrained when the caller actually paginated.
+		const { page, limit, offset } = this.resolvePagination(
+			pagination?.page,
+			pagination?.limit,
+		);
 		if (pagination) {
-			const { limit: safeLimit, offset } = this.resolvePagination(
-				pagination.page,
-				pagination.limit,
-			);
-			query = query.limit(safeLimit).offset(offset);
+			query = query.limit(limit).offset(offset);
 		}
 
 		const data = await query;
@@ -950,6 +973,6 @@ export abstract class SqlBaseCrudService<
 		const totalResult = await countQuery;
 		const total = parseInt(totalResult[0]?.count?.toString() || "0");
 
-		return { data, total };
+		return { data, total, page, limit };
 	}
 }

@@ -173,6 +173,9 @@ class SqlBaseCrudService {
             if (!col) {
                 throw new common_1.BadRequestException(`Unknown sort column: ${sortBy}`);
             }
+            if (sortOrder !== "asc" && sortOrder !== "desc") {
+                throw new common_1.BadRequestException(`Invalid sortOrder: ${sortOrder} (expected 'asc' or 'desc')`);
+            }
             return [sortOrder === "desc" ? (0, drizzle_orm_1.desc)(col) : (0, drizzle_orm_1.asc)(col)];
         }
         const out = [];
@@ -630,6 +633,11 @@ class SqlBaseCrudService {
     }
     applyComplexFilter(conditions, column, filterObj) {
         for (const [op, value] of Object.entries(filterObj)) {
+            if ((op === "gt" || op === "gte" || op === "lt" || op === "lte") &&
+                typeof value === "number" &&
+                !Number.isFinite(value)) {
+                throw new common_1.BadRequestException(`Invalid numeric filter operand for "${op}": ${value}`);
+            }
             switch (op) {
                 case "gt":
                     conditions.push((0, drizzle_orm_1.gt)(column, value));
@@ -694,9 +702,9 @@ class SqlBaseCrudService {
             .from(this.config.table)
             .where(whereExpr)
             .orderBy((0, drizzle_orm_1.sql) `ts_rank(${tsVector}, ${tsQuery}) DESC`);
+        const { page, limit, offset } = this.resolvePagination(pagination?.page, pagination?.limit);
         if (pagination) {
-            const { limit: safeLimit, offset } = this.resolvePagination(pagination.page, pagination.limit);
-            query = query.limit(safeLimit).offset(offset);
+            query = query.limit(limit).offset(offset);
         }
         const data = await query;
         const countQuery = db
@@ -705,7 +713,7 @@ class SqlBaseCrudService {
             .where(whereExpr);
         const totalResult = await countQuery;
         const total = parseInt(totalResult[0]?.count?.toString() || "0");
-        return { data, total };
+        return { data, total, page, limit };
     }
 }
 exports.SqlBaseCrudService = SqlBaseCrudService;
