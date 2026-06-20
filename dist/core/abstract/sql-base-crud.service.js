@@ -587,7 +587,7 @@ class SqlBaseCrudService {
         }
         else if (typeof value === "string" &&
             this.config.sql?.caseSensitive === false) {
-            conditions.push((0, drizzle_orm_1.ilike)(column, value));
+            conditions.push((0, drizzle_orm_1.sql) `lower(${column}) = lower(${value})`);
         }
         else if (typeof value === "object" && value !== null) {
             this.applyComplexFilter(conditions, column, value);

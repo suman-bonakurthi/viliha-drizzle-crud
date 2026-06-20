@@ -14,6 +14,7 @@ import {
 	ConflictException,
 	HttpException,
 } from "@nestjs/common";
+import { PgDialect, pgTable, serial, varchar } from "drizzle-orm/pg-core";
 import { SqlBaseCrudService } from "../src/core/abstract/sql-base-crud.service";
 import {
 	DuplicateEntityException,
@@ -250,5 +251,49 @@ describe("F3: non-finite numeric filter operand -> 400 (not a raw 500)", () => {
 		expect(() =>
 			svc.applyComplexFilter([], "views", { lte: Infinity }),
 		).toThrow(BadRequestException);
+	});
+});
+
+describe("F4: case-insensitive string filter is EXACT, not a wildcard pattern", () => {
+	// A plain string filter value is documented as a case-insensitive *exact*
+	// match. It previously compiled to `ilike(column, value)`, so a value
+	// containing `%` / `_` / `\` was treated as a LIKE pattern (wrong rows).
+	// The fix compiles it to `lower(column) = lower(value)` instead. Rendered to
+	// SQL with the real Postgres dialect so the operator is asserted directly.
+	const dialect = new PgDialect();
+	const table = pgTable("e", {
+		id: serial("id").primaryKey(),
+		name: varchar("name", { length: 100 }),
+	});
+	const svc: any = TestCrudFactory.createTestService(
+		Svc,
+		TestCrudFactory.createMockDb(),
+		table,
+	);
+
+	const render = (filters: any) => {
+		const { conditions } = svc.buildFilterConditions(filters);
+		expect(conditions).toHaveLength(1);
+		return dialect.sqlToQuery(conditions[0]).sql.toLowerCase();
+	};
+
+	it("compiles a plain string to lower()=lower(), never ilike", () => {
+		const sqlText = render({ name: "a%b" });
+		expect(sqlText).toContain("lower(");
+		expect(sqlText).not.toContain("ilike");
+	});
+
+	it("treats %/_ as literal data: same SQL shape as a wildcard-free value", () => {
+		// The wildcard chars must be parameters, not pattern syntax — so the SQL
+		// template is identical whether or not the value contains % or _.
+		expect(render({ name: "a%b" })).toBe(render({ name: "abc" }));
+	});
+
+	it("still uses ILIKE for the explicit { ilike } operator", () => {
+		expect(render({ name: { ilike: "a%" } })).toContain("ilike");
+	});
+
+	it("still uses an exact comparison for an array (IN) value", () => {
+		expect(render({ name: ["x", "y"] })).toContain("in (");
 	});
 });

@@ -357,7 +357,7 @@ export class UsersService extends SqlBaseCrudService<User, CreateUserDto, Update
 
 | Method | Returns |
 |---|---|
-| `fullTextSearch(term, columns, pagination?, options?)` | `Promise<{ data: T[]; total: number }>` (PostgreSQL only) |
+| `fullTextSearch(term, columns, pagination?, options?)` | `Promise<{ data: T[]; total: number; page: number; limit: number }>` (PostgreSQL only) |
 
 ### `SqlOperationOptions`
 
@@ -402,8 +402,10 @@ await service.findAll({
 | `isNull` / `isNotNull` | `IS NULL` / `IS NOT NULL` |
 
 > A bare string value is an **exact** match. When `sql.caseSensitive` is `false`
-> (the default) it uses `ILIKE` *without* wildcards (case-insensitive exact match).
-> For partial matching, use the explicit `like`/`ilike` operators with wildcards.
+> (the default) it compares `lower(column) = lower(value)`, so the match is
+> case-insensitive and `%` / `_` / `\` in the value are treated as literal
+> characters — not wildcards. For partial/pattern matching, use the explicit
+> `like` / `ilike` operators and supply your own wildcards.
 
 ---
 

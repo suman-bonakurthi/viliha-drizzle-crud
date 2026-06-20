@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Scope note: the 3.0.x line is PostgreSQL-first. MySQL-specific paths (non-`RETURNING`
 restore, `ER_DUP_ENTRY` mapping, dialect locking) are tracked separately and unchanged here.
 
+## [3.0.3] - 2026-06-20
+
+Correctness fix found while validating the package from a fresh NestJS consumer
+(see `drizzle-pkg-demo`). PostgreSQL-first. Verified by 53 jest specs + 47 HTTP e2e assertions.
+
+### Fixed
+- **Case-insensitive string filters are now EXACT, not wildcard patterns.** A plain string
+  value in a `findAll`/`count` filter (e.g. `{ name: "foo" }`) is documented as a
+  case-insensitive *exact* match, but compiled to `ilike(column, value)` — so a value containing
+  `%`, `_` or `\` was silently treated as a `LIKE` pattern and returned non-matching rows
+  (e.g. `{ title: "a_b" }` matched `"aXb"`; `{ title: "a%" }` matched everything). It now compiles
+  to `lower(column) = lower(value)`, so those characters are treated as literal data. The explicit
+  `{ like }` / `{ ilike }` operators are unchanged for intentional pattern matching.
+
 ## [3.0.2] - 2026-06-19
 
 Residual-edge hardening found by an end-to-end HTTP probe of 3.0.1 (all LOW severity;
@@ -64,6 +78,7 @@ Correctness pass: typed exceptions now map to real HTTP status codes, plus sever
 Published as `@quybquang/nestjs-drizzle-crud`. Notable: 2.2.0 added a configurable module-level
 default sort; 2.1.2 documented the timestamps feature. See git history for details.
 
+[3.0.3]: https://www.npmjs.com/package/nestjs-drizzle-crud/v/3.0.3
 [3.0.2]: https://www.npmjs.com/package/nestjs-drizzle-crud/v/3.0.2
 [3.0.1]: https://www.npmjs.com/package/nestjs-drizzle-crud/v/3.0.1
 [3.0.0]: https://www.npmjs.com/package/nestjs-drizzle-crud/v/3.0.0
