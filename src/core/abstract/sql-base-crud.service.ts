@@ -686,9 +686,13 @@ export abstract class SqlBaseCrudService<
 			typeof value === "string" &&
 			this.config.sql?.caseSensitive === false
 		) {
-			// Case-insensitive *exact* match. Use the `{ like: ... }` /
-			// `{ ilike: ... }` operators explicitly for pattern matching.
-			conditions.push(ilike(column, value));
+			// Case-insensitive *exact* match. Compare `lower(column) = lower(value)`
+			// rather than `ilike(column, value)`: ILIKE treats `%`, `_` and `\` in
+			// the value as wildcards/escapes, which silently turns an equality
+			// filter into a pattern match (returning rows that don't actually
+			// equal the value). Use the explicit `{ like: ... }` / `{ ilike: ... }`
+			// operators when pattern matching is intended.
+			conditions.push(sql`lower(${column}) = lower(${value})`);
 		} else if (typeof value === "object" && value !== null) {
 			this.applyComplexFilter(conditions, column, value);
 		} else {
