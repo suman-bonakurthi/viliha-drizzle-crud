@@ -106,6 +106,59 @@ describe("Bug #3: unique violation -> DuplicateEntityException (409)", () => {
 	});
 });
 
+describe("Bug #8: data violations -> ValidationFailedException (400)", () => {
+	const mockTable = TestCrudFactory.createMockTable();
+
+	it("maps a raw Postgres 22001 (value too long) on create to 400", async () => {
+		const insert: any = {
+			values: jest.fn(() => insert),
+			returning: jest.fn(() =>
+				Promise.reject(
+					Object.assign(new Error("too long"), { code: "22001" }),
+				),
+			),
+		};
+		const db: any = { insert: jest.fn(() => insert) };
+		const svc = TestCrudFactory.createTestService(Svc, db, mockTable);
+		await expect(
+			(svc as any).create({ name: "x", email: "y" }),
+		).rejects.toBeInstanceOf(ValidationFailedException);
+	});
+
+	it("maps a wrapped DrizzleQueryError (cause.code 23514, CHECK) on create to 400", async () => {
+		const insert: any = {
+			values: jest.fn(() => insert),
+			returning: jest.fn(() =>
+				Promise.reject(
+					Object.assign(new Error("drizzle"), { cause: { code: "23514" } }),
+				),
+			),
+		};
+		const db: any = { insert: jest.fn(() => insert) };
+		const svc = TestCrudFactory.createTestService(Svc, db, mockTable);
+		const err = await (svc as any)
+			.create({ name: "x", email: "y" })
+			.catch((e: unknown) => e);
+		expect(err).toBeInstanceOf(HttpException);
+		expect((err as HttpException).getStatus()).toBe(400);
+	});
+
+	it("still lets an unmapped error (e.g. 42P01) bubble unchanged", async () => {
+		const raw = Object.assign(new Error("relation does not exist"), {
+			code: "42P01",
+		});
+		const insert: any = {
+			values: jest.fn(() => insert),
+			returning: jest.fn(() => Promise.reject(raw)),
+		};
+		const db: any = { insert: jest.fn(() => insert) };
+		const svc = TestCrudFactory.createTestService(Svc, db, mockTable);
+		await expect((svc as any).create({ name: "x", email: "y" })).rejects.toBe(
+			raw,
+		);
+	});
+});
+
 describe("Bug #4: pagination clamping", () => {
 	let svc: any;
 	beforeEach(() => {

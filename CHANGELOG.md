@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Scope note: the 3.0.x line is PostgreSQL-first. MySQL-specific paths (non-`RETURNING`
 restore, `ER_DUP_ENTRY` mapping, dialect locking) are tracked separately and unchanged here.
 
+## [3.0.4] - 2026-06-21
+
+Found while probing the package over real HTTP from the `drizzle-pkg-demo` consumer
+(`scripts/probe.sh`). PostgreSQL-first. Verified by 56 jest specs + 56 HTTP e2e assertions.
+
+### Fixed
+- **Bad client input on `create`/`update` now maps to 400, not a raw 500.** A value that is too
+  long for its column (Postgres `22001`), fails a `CHECK` constraint (`23514`), or is numerically
+  out of range (`22003`) previously surfaced as an unhandled `DrizzleQueryError` → 500 Internal
+  Server Error. These are now translated to `ValidationFailedException` (400), mirroring the
+  existing unique-violation → 409 mapping. NOT-NULL/FK violations are intentionally left to bubble
+  (they usually indicate a programming/config error, not a recoverable bad value).
+
 ## [3.0.3] - 2026-06-20
 
 Correctness fix found while validating the package from a fresh NestJS consumer

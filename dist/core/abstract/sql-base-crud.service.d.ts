@@ -1,4 +1,4 @@
-import { DuplicateEntityException } from "../../exceptions/crud.exceptions";
+import { DuplicateEntityException, ValidationFailedException } from "../../exceptions/crud.exceptions";
 import { ICrudService, PaginationOptions } from "../interfaces/crud-service.interface";
 import { SqlCrudConfig, SqlOperationOptions } from "../interfaces/sql-crud-config.interface";
 import { SortOrder } from "../types/sql.types";
@@ -37,6 +37,8 @@ export declare abstract class SqlBaseCrudService<T extends Record<string, any>, 
     };
     protected isUniqueViolation(error: any): boolean;
     protected toDuplicateException(error: any): DuplicateEntityException;
+    protected isDataException(error: any): boolean;
+    protected toDataException(error: any): ValidationFailedException;
     protected applyLock(query: any, options?: SqlOperationOptions): any;
     find(id: any, options?: SqlOperationOptions): Promise<T | null>;
     findOne(where: Partial<T>, options?: SqlOperationOptions): Promise<T | null>;

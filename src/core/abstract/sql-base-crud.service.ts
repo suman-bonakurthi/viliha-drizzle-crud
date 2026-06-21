@@ -23,6 +23,7 @@ import {
 	BulkOperationException,
 	DuplicateEntityException,
 	EntityNotFoundException,
+	ValidationFailedException,
 } from "../../exceptions/crud.exceptions";
 import {
 	ICrudService,
@@ -325,6 +326,27 @@ export abstract class SqlBaseCrudService<
 		);
 	}
 
+	// Postgres data-integrity violations caused by bad CLIENT INPUT rather than a
+	// server fault: value too long (22001), failed CHECK (23514), numeric out of
+	// range (22003). These otherwise surface as a raw 500; map them to 400 so the
+	// caller sees a client error (mirrors the unique-violation -> 409 mapping).
+	// (NOT-NULL / FK violations are intentionally left to bubble: they usually
+	// indicate a programming/config error, not a recoverable bad value.)
+	protected isDataException(error: any): boolean {
+		const code = error?.code ?? error?.cause?.code;
+		return code === "22001" || code === "23514" || code === "22003";
+	}
+
+	protected toDataException(error: any): ValidationFailedException {
+		const code = error?.code ?? error?.cause?.code;
+		const messages: Record<string, string> = {
+			"22001": "a value is too long for its column",
+			"23514": "a value violates a column check constraint",
+			"22003": "a numeric value is out of range",
+		};
+		return new ValidationFailedException(messages[code] ?? "invalid value");
+	}
+
 	// Apply a row-level lock to a SELECT builder (Postgres only; no-op elsewhere).
 	protected applyLock(query: any, options?: SqlOperationOptions): any {
 		if (this.config.dialect !== "postgresql") return query;
@@ -480,6 +502,8 @@ export abstract class SqlBaseCrudService<
 		} catch (error) {
 			// Surface a unique violation as 409 Conflict instead of a raw 500.
 			if (this.isUniqueViolation(error)) throw this.toDuplicateException(error);
+			// Bad client input (too long / failed check / out of range) -> 400.
+			if (this.isDataException(error)) throw this.toDataException(error);
 			throw error;
 		}
 	}
@@ -525,6 +549,7 @@ export abstract class SqlBaseCrudService<
 			}
 		} catch (error) {
 			if (this.isUniqueViolation(error)) throw this.toDuplicateException(error);
+			if (this.isDataException(error)) throw this.toDataException(error);
 			throw error;
 		}
 	}

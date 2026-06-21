@@ -213,6 +213,19 @@ class SqlBaseCrudService {
         const m = detail.match(/Key \((?<field>.+?)\)=\((?<value>.+?)\)/);
         return new crud_exceptions_1.DuplicateEntityException(this.getEntityName(), m?.groups?.field ?? "unique field", m?.groups?.value ?? "");
     }
+    isDataException(error) {
+        const code = error?.code ?? error?.cause?.code;
+        return code === "22001" || code === "23514" || code === "22003";
+    }
+    toDataException(error) {
+        const code = error?.code ?? error?.cause?.code;
+        const messages = {
+            "22001": "a value is too long for its column",
+            "23514": "a value violates a column check constraint",
+            "22003": "a numeric value is out of range",
+        };
+        return new crud_exceptions_1.ValidationFailedException(messages[code] ?? "invalid value");
+    }
     applyLock(query, options) {
         if (this.config.dialect !== "postgresql")
             return query;
@@ -329,6 +342,8 @@ class SqlBaseCrudService {
         catch (error) {
             if (this.isUniqueViolation(error))
                 throw this.toDuplicateException(error);
+            if (this.isDataException(error))
+                throw this.toDataException(error);
             throw error;
         }
     }
@@ -372,6 +387,8 @@ class SqlBaseCrudService {
         catch (error) {
             if (this.isUniqueViolation(error))
                 throw this.toDuplicateException(error);
+            if (this.isDataException(error))
+                throw this.toDataException(error);
             throw error;
         }
     }
