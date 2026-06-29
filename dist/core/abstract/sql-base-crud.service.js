@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SqlBaseCrudService = void 0;
 const drizzle_orm_1 = require("drizzle-orm");
+const common_1 = require("@nestjs/common");
 const crud_exceptions_1 = require("../../exceptions/crud.exceptions");
 class SqlBaseCrudService {
     config;
@@ -90,17 +91,17 @@ class SqlBaseCrudService {
     async beforeCreate(data) {
         return data;
     }
-    async afterCreate(entity) { }
-    async beforeUpdate(id, data) {
+    async afterCreate(_entity) { }
+    async beforeUpdate(_id, data) {
         return data;
     }
-    async afterUpdate(entity) { }
-    async beforeDelete(id) { }
-    async afterDelete(id) { }
-    async beforeSoftDelete(id) { }
-    async afterSoftDelete(id) { }
-    async beforeRestore(id) { }
-    async afterRestore(entity) { }
+    async afterUpdate(_entity) { }
+    async beforeDelete(_id) { }
+    async afterDelete(_id) { }
+    async beforeSoftDelete(_id) { }
+    async afterSoftDelete(_id) { }
+    async beforeRestore(_id) { }
+    async afterRestore(_entity) { }
     eagerRelations(relations) {
         const configured = this.config.relations || {};
         return (relations || []).filter((name) => !!configured[name]);
@@ -166,6 +167,74 @@ class SqlBaseCrudService {
             return out;
         });
     }
+    buildOrderBy(sortBy, sortOrder = "desc") {
+        if (sortBy) {
+            const col = this.config.table[sortBy];
+            if (!col) {
+                throw new common_1.BadRequestException(`Unknown sort column: ${sortBy}`);
+            }
+            if (sortOrder !== "asc" && sortOrder !== "desc") {
+                throw new common_1.BadRequestException(`Invalid sortOrder: ${sortOrder} (expected 'asc' or 'desc')`);
+            }
+            return [sortOrder === "desc" ? (0, drizzle_orm_1.desc)(col) : (0, drizzle_orm_1.asc)(col)];
+        }
+        const out = [];
+        for (const spec of this.config.defaultSort ?? []) {
+            const col = this.config.table[spec.column];
+            if (!col) {
+                console.warn(`[nestjs-drizzle-crud] defaultSort references unknown column "${spec.column}"; skipping.`);
+                continue;
+            }
+            out.push(spec.order === "desc" ? (0, drizzle_orm_1.desc)(col) : (0, drizzle_orm_1.asc)(col));
+        }
+        return out;
+    }
+    resolvePagination(page, limit) {
+        const maxLimit = this.config.pagination.maxLimit;
+        const defaultLimit = this.config.pagination.defaultLimit;
+        const rawPage = page == null || isNaN(Number(page)) ? 1 : Math.floor(Number(page));
+        const rawLimit = limit == null || isNaN(Number(limit))
+            ? defaultLimit
+            : Math.floor(Number(limit));
+        const safePage = Math.max(1, rawPage);
+        const safeLimit = Math.min(Math.max(1, rawLimit), maxLimit);
+        return {
+            page: safePage,
+            limit: safeLimit,
+            offset: (safePage - 1) * safeLimit,
+        };
+    }
+    isUniqueViolation(error) {
+        const code = error?.code ?? error?.cause?.code;
+        return code === "23505";
+    }
+    toDuplicateException(error) {
+        const detail = error?.detail ?? error?.cause?.detail ?? "";
+        const m = detail.match(/Key \((?<field>.+?)\)=\((?<value>.+?)\)/);
+        return new crud_exceptions_1.DuplicateEntityException(this.getEntityName(), m?.groups?.field ?? "unique field", m?.groups?.value ?? "");
+    }
+    isDataException(error) {
+        const code = error?.code ?? error?.cause?.code;
+        return code === "22001" || code === "23514" || code === "22003";
+    }
+    toDataException(error) {
+        const code = error?.code ?? error?.cause?.code;
+        const messages = {
+            "22001": "a value is too long for its column",
+            "23514": "a value violates a column check constraint",
+            "22003": "a numeric value is out of range",
+        };
+        return new crud_exceptions_1.ValidationFailedException(messages[code] ?? "invalid value");
+    }
+    applyLock(query, options) {
+        if (this.config.dialect !== "postgresql")
+            return query;
+        if (options?.forNoKeyUpdate)
+            return query.for("no key update");
+        if (options?.lock && options.lock !== "none")
+            return query.for(options.lock);
+        return query;
+    }
     async find(id, options) {
         const { transaction, relations = [], select = [] } = options || {};
         const db = transaction || this.config.db;
@@ -178,6 +247,7 @@ class SqlBaseCrudService {
         query = this.applyJoins(query, eager)
             .where((0, drizzle_orm_1.and)(...conditions))
             .limit(1);
+        query = this.applyLock(query, options);
         const result = await query;
         return this.normalizeRelations(result, eager)[0] || null;
     }
@@ -193,14 +263,14 @@ class SqlBaseCrudService {
         query = this.applyJoins(query, eager)
             .where((0, drizzle_orm_1.and)(...conditions))
             .limit(1);
+        query = this.applyLock(query, options);
         const result = await query;
         return this.normalizeRelations(result, eager)[0] || null;
     }
     async findAll(filters, pagination, options) {
         const { transaction, relations = [], select = [] } = options || {};
-        const { page = 1, limit = this.config.pagination.defaultLimit, sortBy, sortOrder = "desc", } = pagination || {};
-        const safeLimit = Math.min(limit, this.config.pagination.maxLimit);
-        const offset = (page - 1) * safeLimit;
+        const { sortBy, sortOrder = "desc" } = pagination || {};
+        const { page, limit: safeLimit, offset, } = this.resolvePagination(pagination?.page, pagination?.limit);
         const db = transaction || this.config.db;
         const eager = this.eagerRelations(relations);
         const { conditions, relations: filterRelations } = this.buildFilterConditions(filters);
@@ -213,12 +283,12 @@ class SqlBaseCrudService {
         if (conditions.length > 0) {
             dataQuery = dataQuery.where((0, drizzle_orm_1.and)(...conditions));
         }
-        if (sortBy && this.config.table[sortBy]) {
-            dataQuery = dataQuery.orderBy(sortOrder === "desc"
-                ? (0, drizzle_orm_1.desc)(this.config.table[sortBy])
-                : (0, drizzle_orm_1.asc)(this.config.table[sortBy]));
+        const orderBy = this.buildOrderBy(sortBy, sortOrder);
+        if (orderBy.length > 0) {
+            dataQuery = dataQuery.orderBy(...orderBy);
         }
         dataQuery = dataQuery.limit(safeLimit).offset(offset);
+        dataQuery = this.applyLock(dataQuery, options);
         let countQuery = db
             .select({ count: (0, drizzle_orm_1.sql) `count(*)` })
             .from(this.config.table);
@@ -249,23 +319,32 @@ class SqlBaseCrudService {
             entityData[this.config.timestamps.updatedAt] = now;
         const db = transaction || this.config.db;
         let insertQuery = db.insert(this.config.table).values(entityData);
-        if (this.config.sql?.useReturning) {
-            insertQuery = insertQuery.returning();
-            const result = await insertQuery;
-            const createdEntity = result[0];
-            if (!hooks.skipAfter)
-                await this.afterCreate(createdEntity);
-            return createdEntity;
+        try {
+            if (this.config.sql?.useReturning) {
+                insertQuery = insertQuery.returning();
+                const result = await insertQuery;
+                const createdEntity = result[0];
+                if (!hooks.skipAfter)
+                    await this.afterCreate(createdEntity);
+                return createdEntity;
+            }
+            else {
+                const result = await insertQuery;
+                const lastInsertId = entityData[this.config.primaryKey] ?? result?.[0]?.insertId;
+                const createdEntity = await this.find(lastInsertId, options);
+                if (!createdEntity)
+                    throw new Error("Failed to create entity");
+                if (!hooks.skipAfter)
+                    await this.afterCreate(createdEntity);
+                return createdEntity;
+            }
         }
-        else {
-            const result = await insertQuery;
-            const lastInsertId = entityData[this.config.primaryKey] ?? result?.[0]?.insertId;
-            const createdEntity = await this.find(lastInsertId, options);
-            if (!createdEntity)
-                throw new Error("Failed to create entity");
-            if (!hooks.skipAfter)
-                await this.afterCreate(createdEntity);
-            return createdEntity;
+        catch (error) {
+            if (this.isUniqueViolation(error))
+                throw this.toDuplicateException(error);
+            if (this.isDataException(error))
+                throw this.toDataException(error);
+            throw error;
         }
     }
     async update(id, data, options) {
@@ -286,22 +365,31 @@ class SqlBaseCrudService {
             .update(this.config.table)
             .set(entityData)
             .where((0, drizzle_orm_1.eq)(this.config.table[this.config.primaryKey], id));
-        if (this.config.sql?.useReturning) {
-            updateQuery = updateQuery.returning();
-            const result = await updateQuery;
-            const updatedEntity = result[0];
-            if (!hooks.skipAfter)
-                await this.afterUpdate(updatedEntity);
-            return updatedEntity;
+        try {
+            if (this.config.sql?.useReturning) {
+                updateQuery = updateQuery.returning();
+                const result = await updateQuery;
+                const updatedEntity = result[0];
+                if (!hooks.skipAfter)
+                    await this.afterUpdate(updatedEntity);
+                return updatedEntity;
+            }
+            else {
+                await updateQuery;
+                const updatedEntity = await this.find(id, options);
+                if (!updatedEntity)
+                    throw new Error("Failed to update entity");
+                if (!hooks.skipAfter)
+                    await this.afterUpdate(updatedEntity);
+                return updatedEntity;
+            }
         }
-        else {
-            await updateQuery;
-            const updatedEntity = await this.find(id, options);
-            if (!updatedEntity)
-                throw new Error("Failed to update entity");
-            if (!hooks.skipAfter)
-                await this.afterUpdate(updatedEntity);
-            return updatedEntity;
+        catch (error) {
+            if (this.isUniqueViolation(error))
+                throw this.toDuplicateException(error);
+            if (this.isDataException(error))
+                throw this.toDataException(error);
+            throw error;
         }
     }
     async softDelete(id, options) {
@@ -516,7 +604,7 @@ class SqlBaseCrudService {
         }
         else if (typeof value === "string" &&
             this.config.sql?.caseSensitive === false) {
-            conditions.push((0, drizzle_orm_1.ilike)(column, value));
+            conditions.push((0, drizzle_orm_1.sql) `lower(${column}) = lower(${value})`);
         }
         else if (typeof value === "object" && value !== null) {
             this.applyComplexFilter(conditions, column, value);
@@ -562,6 +650,11 @@ class SqlBaseCrudService {
     }
     applyComplexFilter(conditions, column, filterObj) {
         for (const [op, value] of Object.entries(filterObj)) {
+            if ((op === "gt" || op === "gte" || op === "lt" || op === "lte") &&
+                typeof value === "number" &&
+                !Number.isFinite(value)) {
+                throw new common_1.BadRequestException(`Invalid numeric filter operand for "${op}": ${value}`);
+            }
             switch (op) {
                 case "gt":
                     conditions.push((0, drizzle_orm_1.gt)(column, value));
@@ -617,25 +710,27 @@ class SqlBaseCrudService {
         const db = transaction || this.config.db;
         const tsVector = drizzle_orm_1.sql.join(searchColumns.map((col) => (0, drizzle_orm_1.sql) `to_tsvector('english', ${this.config.table[col]})`), (0, drizzle_orm_1.sql) ` || `);
         const tsQuery = (0, drizzle_orm_1.sql) `plainto_tsquery('english', ${searchTerm})`;
+        const matchExpr = (0, drizzle_orm_1.sql) `${tsVector} @@ ${tsQuery}`;
+        const whereExpr = this.config.softDelete?.enabled
+            ? (0, drizzle_orm_1.and)(matchExpr, (0, drizzle_orm_1.isNull)(this.config.table[this.config.softDelete.column]))
+            : matchExpr;
         let query = db
             .select()
             .from(this.config.table)
-            .where((0, drizzle_orm_1.sql) `${tsVector} @@ ${tsQuery}`)
+            .where(whereExpr)
             .orderBy((0, drizzle_orm_1.sql) `ts_rank(${tsVector}, ${tsQuery}) DESC`);
+        const { page, limit, offset } = this.resolvePagination(pagination?.page, pagination?.limit);
         if (pagination) {
-            const { page = 1, limit = this.config.pagination.defaultLimit } = pagination;
-            const safeLimit = Math.min(limit, this.config.pagination.maxLimit);
-            const offset = (page - 1) * safeLimit;
-            query = query.limit(safeLimit).offset(offset);
+            query = query.limit(limit).offset(offset);
         }
         const data = await query;
         const countQuery = db
             .select({ count: (0, drizzle_orm_1.sql) `count(*)` })
             .from(this.config.table)
-            .where((0, drizzle_orm_1.sql) `${tsVector} @@ ${tsQuery}`);
+            .where(whereExpr);
         const totalResult = await countQuery;
         const total = parseInt(totalResult[0]?.count?.toString() || "0");
-        return { data, total };
+        return { data, total, page, limit };
     }
 }
 exports.SqlBaseCrudService = SqlBaseCrudService;

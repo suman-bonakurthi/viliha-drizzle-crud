@@ -1,5 +1,7 @@
+import { DuplicateEntityException, ValidationFailedException } from "../../exceptions/crud.exceptions";
 import { ICrudService, PaginationOptions } from "../interfaces/crud-service.interface";
 import { SqlCrudConfig, SqlOperationOptions } from "../interfaces/sql-crud-config.interface";
+import { SortOrder } from "../types/sql.types";
 export declare abstract class SqlBaseCrudService<T extends Record<string, any>, CreateDto, UpdateDto, FilterDto> implements ICrudService<T, CreateDto, UpdateDto, FilterDto> {
     protected readonly config: SqlCrudConfig;
     protected readonly defaultConfig: SqlCrudConfig;
@@ -13,20 +15,31 @@ export declare abstract class SqlBaseCrudService<T extends Record<string, any>, 
     protected mapCreateDtoToEntity(data: CreateDto): Record<string, any>;
     protected mapUpdateDtoToEntity(data: UpdateDto): Record<string, any>;
     protected beforeCreate(data: CreateDto): Promise<CreateDto>;
-    protected afterCreate(entity: T): Promise<void>;
-    protected beforeUpdate(id: any, data: UpdateDto): Promise<UpdateDto>;
-    protected afterUpdate(entity: T): Promise<void>;
-    protected beforeDelete(id: any): Promise<void>;
-    protected afterDelete(id: any): Promise<void>;
-    protected beforeSoftDelete(id: any): Promise<void>;
-    protected afterSoftDelete(id: any): Promise<void>;
-    protected beforeRestore(id: any): Promise<void>;
-    protected afterRestore(entity: T): Promise<void>;
+    protected afterCreate(_entity: T): Promise<void>;
+    protected beforeUpdate(_id: any, data: UpdateDto): Promise<UpdateDto>;
+    protected afterUpdate(_entity: T): Promise<void>;
+    protected beforeDelete(_id: any): Promise<void>;
+    protected afterDelete(_id: any): Promise<void>;
+    protected beforeSoftDelete(_id: any): Promise<void>;
+    protected afterSoftDelete(_id: any): Promise<void>;
+    protected beforeRestore(_id: any): Promise<void>;
+    protected afterRestore(_entity: T): Promise<void>;
     protected eagerRelations(relations: string[]): string[];
     protected buildSelection(select: string[], eager: string[]): Record<string, any>;
     protected startSelect(db: any, select: string[], eager: string[], hasJoins?: boolean): any;
     protected applyJoins(query: any, relationNames: string[]): any;
     protected normalizeRelations(rows: any[], eager: string[]): any[];
+    protected buildOrderBy(sortBy?: string, sortOrder?: SortOrder): any[];
+    protected resolvePagination(page?: number, limit?: number): {
+        page: number;
+        limit: number;
+        offset: number;
+    };
+    protected isUniqueViolation(error: any): boolean;
+    protected toDuplicateException(error: any): DuplicateEntityException;
+    protected isDataException(error: any): boolean;
+    protected toDataException(error: any): ValidationFailedException;
+    protected applyLock(query: any, options?: SqlOperationOptions): any;
     find(id: any, options?: SqlOperationOptions): Promise<T | null>;
     findOne(where: Partial<T>, options?: SqlOperationOptions): Promise<T | null>;
     findAll(filters?: FilterDto, pagination?: PaginationOptions, options?: SqlOperationOptions): Promise<{
@@ -59,5 +72,7 @@ export declare abstract class SqlBaseCrudService<T extends Record<string, any>, 
     fullTextSearch(searchTerm: string, searchColumns: string[], pagination?: PaginationOptions, options?: SqlOperationOptions): Promise<{
         data: T[];
         total: number;
+        page: number;
+        limit: number;
     }>;
 }

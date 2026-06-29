@@ -1,4 +1,4 @@
-import { SqlDialect } from "../types/sql.types";
+import { SortOrder, SqlDialect } from "../types/sql.types";
 export interface DrizzleCrudConfig {
     dialect: SqlDialect;
     db?: any;
@@ -11,6 +11,7 @@ export interface DrizzleCrudConfig {
             defaultLimit: number;
             maxLimit: number;
         };
+        sortOrder?: SortOrder;
     };
     sql?: {
         caseSensitive: boolean;

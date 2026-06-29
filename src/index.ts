@@ -39,12 +39,12 @@ export type {
 // Types
 export type {
 	PrimaryKeyType,
+	SortColumn,
+	SortOrder,
 	SqlDialect,
-	SqlFilterCondition,
 } from "./core/types/sql.types";
 // Decorators
 export { CrudService } from "./decorators/crud-service.decorator";
-export { EntityConfig } from "./decorators/entity-config.decorator";
 // Exceptions
 export {
 	BulkOperationException,

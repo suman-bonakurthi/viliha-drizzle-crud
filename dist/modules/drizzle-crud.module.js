@@ -55,6 +55,13 @@ function buildEntityConfig(service, table, entityConfig, db, globalConfig) {
         finalConfig.sql = globalConfig.sql;
     Object.assign(finalConfig, perEntity);
     finalConfig.table = table ?? perEntity.table;
+    if (!finalConfig.defaultSort &&
+        gd.sortOrder &&
+        finalConfig.timestamps?.createdAt) {
+        finalConfig.defaultSort = [
+            { column: finalConfig.timestamps.createdAt, order: gd.sortOrder },
+        ];
+    }
     return finalConfig;
 }
 function connectionProviders(rawConfigProvider) {

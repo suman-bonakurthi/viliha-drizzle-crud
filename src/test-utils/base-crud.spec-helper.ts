@@ -2,7 +2,8 @@ import { SqlBaseCrudService } from "../core/abstract/sql-base-crud.service";
 import { TestCrudFactory } from "./test-factory";
 
 export class BaseCrudSpecHelper<T extends Record<string, any>, C, U, F> {
-	protected service: SqlBaseCrudService<T, C, U, F>;
+	// Assigned in setup(), invoked from the constructor.
+	protected service!: SqlBaseCrudService<T, C, U, F>;
 	protected mockDb: any;
 	protected mockTable: any;
 

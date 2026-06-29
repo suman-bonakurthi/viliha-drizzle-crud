@@ -18,9 +18,12 @@ import {
 	ne,
 	sql,
 } from "drizzle-orm";
+import { BadRequestException } from "@nestjs/common";
 import {
 	BulkOperationException,
+	DuplicateEntityException,
 	EntityNotFoundException,
+	ValidationFailedException,
 } from "../../exceptions/crud.exceptions";
 import {
 	ICrudService,
@@ -30,6 +33,7 @@ import {
 	SqlCrudConfig,
 	SqlOperationOptions,
 } from "../interfaces/sql-crud-config.interface";
+import { SortOrder } from "../types/sql.types";
 
 export abstract class SqlBaseCrudService<
 	T extends Record<string, any>,
@@ -137,17 +141,17 @@ export abstract class SqlBaseCrudService<
 	protected async beforeCreate(data: CreateDto): Promise<CreateDto> {
 		return data;
 	}
-	protected async afterCreate(entity: T): Promise<void> {}
-	protected async beforeUpdate(id: any, data: UpdateDto): Promise<UpdateDto> {
+	protected async afterCreate(_entity: T): Promise<void> {}
+	protected async beforeUpdate(_id: any, data: UpdateDto): Promise<UpdateDto> {
 		return data;
 	}
-	protected async afterUpdate(entity: T): Promise<void> {}
-	protected async beforeDelete(id: any): Promise<void> {}
-	protected async afterDelete(id: any): Promise<void> {}
-	protected async beforeSoftDelete(id: any): Promise<void> {}
-	protected async afterSoftDelete(id: any): Promise<void> {}
-	protected async beforeRestore(id: any): Promise<void> {}
-	protected async afterRestore(entity: T): Promise<void> {}
+	protected async afterUpdate(_entity: T): Promise<void> {}
+	protected async beforeDelete(_id: any): Promise<void> {}
+	protected async afterDelete(_id: any): Promise<void> {}
+	protected async beforeSoftDelete(_id: any): Promise<void> {}
+	protected async afterSoftDelete(_id: any): Promise<void> {}
+	protected async beforeRestore(_id: any): Promise<void> {}
+	protected async afterRestore(_entity: T): Promise<void> {}
 
 	// ---- Relation helpers (many-to-one / belongs-to) ----
 
@@ -242,6 +246,116 @@ export abstract class SqlBaseCrudService<
 		});
 	}
 
+	// Build the ORDER BY expressions for findAll. An explicit caller `sortBy`
+	// wins and fully replaces the configured default; otherwise the entity's
+	// `defaultSort` (possibly multi-column) is applied in order.
+	// A caller-supplied `sortBy` that isn't a real column is a client error and
+	// fails fast (400) rather than silently returning unsorted data. An unknown
+	// column inside the configured `defaultSort` is a developer/config mistake,
+	// so it's warned and skipped (not surfaced to the client).
+	protected buildOrderBy(sortBy?: string, sortOrder: SortOrder = "desc"): any[] {
+		if (sortBy) {
+			const col = this.config.table[sortBy];
+			if (!col) {
+				throw new BadRequestException(`Unknown sort column: ${sortBy}`);
+			}
+			// Fail fast on a bad sortOrder too (mirrors the unknown-column check);
+			// otherwise anything other than "desc" silently sorted ascending.
+			if (sortOrder !== "asc" && sortOrder !== "desc") {
+				throw new BadRequestException(
+					`Invalid sortOrder: ${sortOrder} (expected 'asc' or 'desc')`,
+				);
+			}
+			return [sortOrder === "desc" ? desc(col) : asc(col)];
+		}
+		const out: any[] = [];
+		for (const spec of this.config.defaultSort ?? []) {
+			const col = this.config.table[spec.column];
+			if (!col) {
+				console.warn(
+					`[nestjs-drizzle-crud] defaultSort references unknown column "${spec.column}"; skipping.`,
+				);
+				continue;
+			}
+			out.push(spec.order === "desc" ? desc(col) : asc(col));
+		}
+		return out;
+	}
+
+	// Clamp pagination input to safe bounds: page >= 1 and 1 <= limit <= maxLimit.
+	// Shared by findAll and fullTextSearch so bad input (page<1, limit<=0,
+	// limit>maxLimit) can never produce a negative OFFSET or a LIMIT 0 / LIMIT -n.
+	protected resolvePagination(
+		page?: number,
+		limit?: number,
+	): { page: number; limit: number; offset: number } {
+		const maxLimit = this.config.pagination!.maxLimit!;
+		const defaultLimit = this.config.pagination!.defaultLimit!;
+		const rawPage =
+			page == null || isNaN(Number(page)) ? 1 : Math.floor(Number(page));
+		const rawLimit =
+			limit == null || isNaN(Number(limit))
+				? defaultLimit
+				: Math.floor(Number(limit));
+		const safePage = Math.max(1, rawPage);
+		const safeLimit = Math.min(Math.max(1, rawLimit), maxLimit);
+		return {
+			page: safePage,
+			limit: safeLimit,
+			offset: (safePage - 1) * safeLimit,
+		};
+	}
+
+	// Detect a Postgres unique-constraint violation across driver shapes:
+	// postgres-js sets `.code` on the error; Drizzle wraps it under `.cause`.
+	protected isUniqueViolation(error: any): boolean {
+		const code = error?.code ?? error?.cause?.code;
+		return code === "23505"; // Postgres unique_violation
+	}
+
+	// Turn a Postgres unique violation into a typed 409 exception, parsing the
+	// offending field/value out of the driver `detail` when available
+	// (e.g. "Key (code)=(EU) already exists.").
+	protected toDuplicateException(error: any): DuplicateEntityException {
+		const detail: string = error?.detail ?? error?.cause?.detail ?? "";
+		const m = detail.match(/Key \((?<field>.+?)\)=\((?<value>.+?)\)/);
+		return new DuplicateEntityException(
+			this.getEntityName(),
+			m?.groups?.field ?? "unique field",
+			m?.groups?.value ?? "",
+		);
+	}
+
+	// Postgres data-integrity violations caused by bad CLIENT INPUT rather than a
+	// server fault: value too long (22001), failed CHECK (23514), numeric out of
+	// range (22003). These otherwise surface as a raw 500; map them to 400 so the
+	// caller sees a client error (mirrors the unique-violation -> 409 mapping).
+	// (NOT-NULL / FK violations are intentionally left to bubble: they usually
+	// indicate a programming/config error, not a recoverable bad value.)
+	protected isDataException(error: any): boolean {
+		const code = error?.code ?? error?.cause?.code;
+		return code === "22001" || code === "23514" || code === "22003";
+	}
+
+	protected toDataException(error: any): ValidationFailedException {
+		const code = error?.code ?? error?.cause?.code;
+		const messages: Record<string, string> = {
+			"22001": "a value is too long for its column",
+			"23514": "a value violates a column check constraint",
+			"22003": "a numeric value is out of range",
+		};
+		return new ValidationFailedException(messages[code] ?? "invalid value");
+	}
+
+	// Apply a row-level lock to a SELECT builder (Postgres only; no-op elsewhere).
+	protected applyLock(query: any, options?: SqlOperationOptions): any {
+		if (this.config.dialect !== "postgresql") return query;
+		if (options?.forNoKeyUpdate) return query.for("no key update");
+		if (options?.lock && options.lock !== "none")
+			return query.for(options.lock);
+		return query;
+	}
+
 	// Single Operations
 	async find(id: any, options?: SqlOperationOptions): Promise<T | null> {
 		const { transaction, relations = [], select = [] } = options || {};
@@ -257,6 +371,7 @@ export abstract class SqlBaseCrudService<
 		query = this.applyJoins(query, eager)
 			.where(and(...conditions))
 			.limit(1);
+		query = this.applyLock(query, options);
 
 		const result = await query;
 		return this.normalizeRelations(result, eager)[0] || null;
@@ -279,6 +394,7 @@ export abstract class SqlBaseCrudService<
 		query = this.applyJoins(query, eager)
 			.where(and(...conditions))
 			.limit(1);
+		query = this.applyLock(query, options);
 
 		const result = await query;
 		return this.normalizeRelations(result, eager)[0] || null;
@@ -290,15 +406,12 @@ export abstract class SqlBaseCrudService<
 		options?: SqlOperationOptions,
 	): Promise<{ data: T[]; total: number; page: number; limit: number }> {
 		const { transaction, relations = [], select = [] } = options || {};
+		const { sortBy, sortOrder = "desc" } = pagination || {};
 		const {
-			page = 1,
-			limit = this.config.pagination!.defaultLimit!,
-			sortBy,
-			sortOrder = "desc",
-		} = pagination || {};
-
-		const safeLimit = Math.min(limit, this.config.pagination!.maxLimit!);
-		const offset = (page - 1) * safeLimit;
+			page,
+			limit: safeLimit,
+			offset,
+		} = this.resolvePagination(pagination?.page, pagination?.limit);
 		const db = transaction || this.config.db;
 		const eager = this.eagerRelations(relations);
 
@@ -323,14 +436,12 @@ export abstract class SqlBaseCrudService<
 		if (conditions.length > 0) {
 			dataQuery = dataQuery.where(and(...conditions));
 		}
-		if (sortBy && this.config.table[sortBy]) {
-			dataQuery = dataQuery.orderBy(
-				sortOrder === "desc"
-					? desc(this.config.table[sortBy])
-					: asc(this.config.table[sortBy]),
-			);
+		const orderBy = this.buildOrderBy(sortBy, sortOrder);
+		if (orderBy.length > 0) {
+			dataQuery = dataQuery.orderBy(...orderBy);
 		}
 		dataQuery = dataQuery.limit(safeLimit).offset(offset);
+		dataQuery = this.applyLock(dataQuery, options);
 
 		let countQuery = db
 			.select({ count: sql<number>`count(*)` })
@@ -369,23 +480,31 @@ export abstract class SqlBaseCrudService<
 		const db = transaction || this.config.db;
 		let insertQuery = db.insert(this.config.table).values(entityData);
 
-		if (this.config.sql?.useReturning) {
-			insertQuery = insertQuery.returning();
-			const result = await insertQuery;
-			const createdEntity = result[0];
-			if (!hooks.skipAfter) await this.afterCreate(createdEntity);
-			return createdEntity;
-		} else {
-			const result = await insertQuery;
-			// Without RETURNING (e.g. MySQL): prefer a client-supplied primary key
-			// (required for uuid / non-auto-increment keys), otherwise fall back
-			// to the driver's auto-increment insertId.
-			const lastInsertId =
-				entityData[this.config.primaryKey] ?? result?.[0]?.insertId;
-			const createdEntity = await this.find(lastInsertId, options);
-			if (!createdEntity) throw new Error("Failed to create entity");
-			if (!hooks.skipAfter) await this.afterCreate(createdEntity);
-			return createdEntity;
+		try {
+			if (this.config.sql?.useReturning) {
+				insertQuery = insertQuery.returning();
+				const result = await insertQuery;
+				const createdEntity = result[0];
+				if (!hooks.skipAfter) await this.afterCreate(createdEntity);
+				return createdEntity;
+			} else {
+				const result = await insertQuery;
+				// Without RETURNING (e.g. MySQL): prefer a client-supplied primary key
+				// (required for uuid / non-auto-increment keys), otherwise fall back
+				// to the driver's auto-increment insertId.
+				const lastInsertId =
+					entityData[this.config.primaryKey] ?? result?.[0]?.insertId;
+				const createdEntity = await this.find(lastInsertId, options);
+				if (!createdEntity) throw new Error("Failed to create entity");
+				if (!hooks.skipAfter) await this.afterCreate(createdEntity);
+				return createdEntity;
+			}
+		} catch (error) {
+			// Surface a unique violation as 409 Conflict instead of a raw 500.
+			if (this.isUniqueViolation(error)) throw this.toDuplicateException(error);
+			// Bad client input (too long / failed check / out of range) -> 400.
+			if (this.isDataException(error)) throw this.toDataException(error);
+			throw error;
 		}
 	}
 
@@ -414,18 +533,24 @@ export abstract class SqlBaseCrudService<
 			.set(entityData)
 			.where(eq(this.config.table[this.config.primaryKey], id));
 
-		if (this.config.sql?.useReturning) {
-			updateQuery = updateQuery.returning();
-			const result = await updateQuery;
-			const updatedEntity = result[0];
-			if (!hooks.skipAfter) await this.afterUpdate(updatedEntity);
-			return updatedEntity;
-		} else {
-			await updateQuery;
-			const updatedEntity = await this.find(id, options);
-			if (!updatedEntity) throw new Error("Failed to update entity");
-			if (!hooks.skipAfter) await this.afterUpdate(updatedEntity);
-			return updatedEntity;
+		try {
+			if (this.config.sql?.useReturning) {
+				updateQuery = updateQuery.returning();
+				const result = await updateQuery;
+				const updatedEntity = result[0];
+				if (!hooks.skipAfter) await this.afterUpdate(updatedEntity);
+				return updatedEntity;
+			} else {
+				await updateQuery;
+				const updatedEntity = await this.find(id, options);
+				if (!updatedEntity) throw new Error("Failed to update entity");
+				if (!hooks.skipAfter) await this.afterUpdate(updatedEntity);
+				return updatedEntity;
+			}
+		} catch (error) {
+			if (this.isUniqueViolation(error)) throw this.toDuplicateException(error);
+			if (this.isDataException(error)) throw this.toDataException(error);
+			throw error;
 		}
 	}
 
@@ -686,9 +811,13 @@ export abstract class SqlBaseCrudService<
 			typeof value === "string" &&
 			this.config.sql?.caseSensitive === false
 		) {
-			// Case-insensitive *exact* match. Use the `{ like: ... }` /
-			// `{ ilike: ... }` operators explicitly for pattern matching.
-			conditions.push(ilike(column, value));
+			// Case-insensitive *exact* match. Compare `lower(column) = lower(value)`
+			// rather than `ilike(column, value)`: ILIKE treats `%`, `_` and `\` in
+			// the value as wildcards/escapes, which silently turns an equality
+			// filter into a pattern match (returning rows that don't actually
+			// equal the value). Use the explicit `{ like: ... }` / `{ ilike: ... }`
+			// operators when pattern matching is intended.
+			conditions.push(sql`lower(${column}) = lower(${value})`);
 		} else if (typeof value === "object" && value !== null) {
 			this.applyComplexFilter(conditions, column, value);
 		} else {
@@ -746,6 +875,19 @@ export abstract class SqlBaseCrudService<
 		filterObj: any,
 	): void {
 		for (const [op, value] of Object.entries(filterObj)) {
+			// Guard the ordered-comparison ops against a non-finite numeric operand
+			// (e.g. { gt: NaN } from an unguarded Number('abc') in a controller).
+			// Letting NaN/Infinity reach SQL throws a raw DB error -> opaque 500;
+			// reject it as a 400 instead. Non-number operands (dates/strings) pass.
+			if (
+				(op === "gt" || op === "gte" || op === "lt" || op === "lte") &&
+				typeof value === "number" &&
+				!Number.isFinite(value)
+			) {
+				throw new BadRequestException(
+					`Invalid numeric filter operand for "${op}": ${value}`,
+				);
+			}
 			switch (op) {
 				case "gt":
 					conditions.push(gt(column, value));
@@ -807,7 +949,7 @@ export abstract class SqlBaseCrudService<
 		searchColumns: string[],
 		pagination?: PaginationOptions,
 		options?: SqlOperationOptions,
-	): Promise<{ data: T[]; total: number }> {
+	): Promise<{ data: T[]; total: number; page: number; limit: number }> {
 		if (this.config.dialect !== "postgresql") {
 			throw new Error("Full-text search only supported in PostgreSQL");
 		}
@@ -826,28 +968,40 @@ export abstract class SqlBaseCrudService<
 		);
 		const tsQuery = sql`plainto_tsquery('english', ${searchTerm})`;
 
+		// Like find/findAll/count, exclude soft-deleted rows from search results.
+		const matchExpr = sql`${tsVector} @@ ${tsQuery}`;
+		const whereExpr = this.config.softDelete?.enabled
+			? and(
+					matchExpr,
+					isNull(this.config.table[this.config.softDelete.column]),
+				)
+			: matchExpr;
+
 		let query = db
 			.select()
 			.from(this.config.table)
-			.where(sql`${tsVector} @@ ${tsQuery}`)
+			.where(whereExpr)
 			.orderBy(sql`ts_rank(${tsVector}, ${tsQuery}) DESC`);
 
+		// Resolve page/limit even when pagination is omitted so the envelope is
+		// consistent with findAll's { data, total, page, limit }. The query is
+		// only constrained when the caller actually paginated.
+		const { page, limit, offset } = this.resolvePagination(
+			pagination?.page,
+			pagination?.limit,
+		);
 		if (pagination) {
-			const { page = 1, limit = this.config.pagination!.defaultLimit! } =
-				pagination;
-			const safeLimit = Math.min(limit, this.config.pagination!.maxLimit!);
-			const offset = (page - 1) * safeLimit;
-			query = query.limit(safeLimit).offset(offset);
+			query = query.limit(limit).offset(offset);
 		}
 
 		const data = await query;
 		const countQuery = db
 			.select({ count: sql<number>`count(*)` })
 			.from(this.config.table)
-			.where(sql`${tsVector} @@ ${tsQuery}`);
+			.where(whereExpr);
 		const totalResult = await countQuery;
 		const total = parseInt(totalResult[0]?.count?.toString() || "0");
 
-		return { data, total };
+		return { data, total, page, limit };
 	}
 }

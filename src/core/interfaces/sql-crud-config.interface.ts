@@ -1,4 +1,4 @@
-import { PrimaryKeyType, SqlDialect } from "../types/sql.types";
+import { PrimaryKeyType, SortColumn, SqlDialect } from "../types/sql.types";
 
 // A many-to-one / one-to-one (belongs-to) relation: this table's `localKey`
 // references `references` (default the related table's primary key) on `table`.
@@ -37,6 +37,10 @@ export interface SqlCrudConfig {
 		defaultLimit: number;
 		maxLimit: number;
 	};
+
+	// Default ORDER BY applied by findAll() when the caller passes no sortBy.
+	// Columns are applied in order (primary sort first, then tiebreakers).
+	defaultSort?: SortColumn[];
 
 	// SQL-specific optimizations
 	sql?: {
